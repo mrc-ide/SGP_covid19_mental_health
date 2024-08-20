@@ -1,0 +1,1059 @@
+---
+title: "Age Related Trends in Psychological Symptoms Analysis"
+author: "Nicole Goh"
+date: "2024-07-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyr)
+library(dplyr)
+library(stringr)
+library(lubridate)
+```
+
+# Functions to format results
+```{r}
+CI_output <- function(model){
+    summary_model <- summary(model)
+    
+    p_values <- as.data.frame(summary_model$coefficients[, "Pr(>|z|)"])
+    p_values <- data.frame(term = rownames(p_values), p_values)
+    
+    coefficients <- coef(model)
+    
+    standard_errors <- summary(model)$coefficients[, "Std. Error"]
+
+    critical_value <- 1.96
+
+    lower_bound <- coefficients - critical_value * standard_errors
+    upper_bound <- coefficients + critical_value * standard_errors
+
+    confidence_intervals <- data.frame(
+      lower_bound = exp(lower_bound),
+      upper_bound = exp(upper_bound)
+    )
+    
+    coefficients <- exp(coefficients)
+    
+    # confidence_intervals <- data.frame(confint(model))
+    # colnames(confidence_intervals) <- c("lower_bound", "upper_bound")
+    
+    rownames(as.data.frame(coefficients))
+    output <- data.frame(term = rownames(as.data.frame(coefficients)), coefficients)
+    confidence_intervals <- data.frame(term = rownames(confidence_intervals), confidence_intervals)
+    output <- inner_join(output, confidence_intervals)
+    output <- inner_join(output, p_values)
+    output
+    output <- output %>% 
+      select(term, coefficients, lower_bound, upper_bound, summary_model.coefficients....Pr...z....) %>%
+        mutate(estimate = round(coefficients, 2),
+               conf.low = round(lower_bound, 2),
+               conf.high = round(upper_bound, 2),
+               p.value = round(summary_model.coefficients....Pr...z...., 3)) %>%
+        mutate("OR (95% CI)" = sprintf("%.2f (%.2f, %.2f)", estimate, conf.low, conf.high)) %>%
+        select(1, 10, 9)
+    
+    output
+}
+
+
+
+CI_output_regression <- function(model){
+    summary_model <- summary(model)
+    
+    p_values <- as.data.frame(summary_model$coefficients[, "Pr(>|t|)"])
+    p_values <- data.frame(term = rownames(p_values), p_values)
+    
+    coefficients <- coef(model)
+    
+    standard_errors <- summary(model)$coefficients[, "Std. Error"]
+    
+    critical_value <- 1.96
+
+    lower_bound <- coefficients - critical_value * standard_errors
+    upper_bound <- coefficients + critical_value * standard_errors
+
+    confidence_intervals <- data.frame(
+      lower_bound = lower_bound,
+      upper_bound = upper_bound
+    )
+    
+    # confidence_intervals <- data.frame(confint(model))
+    # colnames(confidence_intervals) <- c("lower_bound", "upper_bound")
+    
+    rownames(as.data.frame(coefficients))
+    output <- data.frame(term = rownames(as.data.frame(coefficients)), coefficients)
+    confidence_intervals <- data.frame(term = rownames(confidence_intervals), confidence_intervals)
+    output <- inner_join(output, confidence_intervals)
+    output <- inner_join(output, p_values)
+    output
+    output <- output %>% 
+      select(term, coefficients, lower_bound, upper_bound, summary_model.coefficients....Pr...t....) %>%
+        mutate(estimate = round(coefficients, 2),
+               conf.low = round(lower_bound, 2),
+               conf.high = round(upper_bound, 2),
+               p.value = round(summary_model.coefficients....Pr...t...., 3)) %>%
+        mutate("Coefficients (95% CI)" = sprintf("%.2f (%.2f, %.2f)", estimate, conf.low, conf.high)) %>%
+        select(1, 10, 9)
+  
+    output
+}
+
+
+
+summary_df <- function(df) {
+  age_group_summary <- df %>% group_by(age_group) %>% summarise(count = n(),
+                                              percentage = count * 100 / nrow(df),
+                                              mean = mean(PHQ4_Total_score), 
+                                              SD = sd(PHQ4_Total_score))
+  
+  
+  gender_summary <- df %>% group_by(gender) %>% summarise(count = n(),
+                                             percentage = count * 100 / nrow(df),
+                                             mean = mean(PHQ4_Total_score), 
+                                             SD = sd(PHQ4_Total_score))
+  
+  mental_health_summary <- df %>% group_by(Have_Mental_health_condition) %>% 
+    summarise(count = n(),
+              percentage = count * 100 / nrow(df),
+              mean = mean(PHQ4_Total_score), 
+              SD = sd(PHQ4_Total_score))
+  
+  employment_summary <- df %>% group_by(employment_status) %>% 
+    summarise(count = n(),
+              percentage = count * 100 / nrow(df),
+              mean = mean(PHQ4_Total_score), 
+              SD = sd(PHQ4_Total_score))
+  
+  names(age_group_summary)[1] <- "Category"
+  names(gender_summary)[1] <- "Category"
+  names(mental_health_summary)[1] <- "Category"
+  names(employment_summary)[1] <- "Category"
+  
+  if ("country" %in% names(df)){
+    country_summary <- df %>% group_by(country) %>% 
+    summarise(count = n(),
+              percentage = count * 100 / nrow(df),
+              mean = mean(PHQ4_Total_score), 
+              SD = sd(PHQ4_Total_score))
+    
+    names(country_summary)[1] <- "Category"
+    
+    sumtable <- rbind(age_group_summary, 
+                    gender_summary, 
+                    mental_health_summary,
+                    employment_summary,
+                    country_summary)
+  } else {
+    sumtable <- rbind(age_group_summary, 
+                    gender_summary, 
+                    mental_health_summary,
+                    employment_summary)
+  }
+  
+  sumtable <- sumtable %>%
+    mutate("Count (%)" = sprintf("%.0f (%.2f%%)", count, percentage)) %>%
+    mutate("M (SD)" = sprintf("%.2f (%.2f)", mean, SD))
+  
+  sumtable[c("Category", "Count (%)", "M (SD)")]
+}
+
+
+
+
+summary_binary_anxiety <- function(df) {
+  age_group_summary <- df %>% group_by(age_group) %>% summarise(count = n(),
+                                              percentage = count * 100 / nrow(df),
+                                              mean = mean(PHQ4_Anxiety), 
+                                              SD = sd(PHQ4_Anxiety))
+  
+  
+  gender_summary <- df %>% group_by(gender) %>% summarise(count = n(),
+                                             percentage = count * 100 / nrow(df),
+                                             mean = mean(PHQ4_Anxiety), 
+                                             SD = sd(PHQ4_Anxiety))
+  
+  mental_health_summary <- df %>% group_by(Have_Mental_health_condition) %>% 
+    summarise(count = n(),
+              percentage = count * 100 / nrow(df),
+              mean = mean(PHQ4_Anxiety), 
+              SD = sd(PHQ4_Anxiety))
+  
+  employment_summary <- df %>% group_by(employment_status) %>% 
+    summarise(count = n(),
+              percentage = count * 100 / nrow(df),
+              mean = mean(PHQ4_Anxiety), 
+              SD = sd(PHQ4_Anxiety))
+  
+  names(age_group_summary)[1] <- "Category"
+  names(gender_summary)[1] <- "Category"
+  names(mental_health_summary)[1] <- "Category"
+  names(employment_summary)[1] <- "Category"
+  
+  if ("country" %in% names(df)){
+    country_summary <- df %>% group_by(country) %>% 
+    summarise(count = n(),
+              percentage = count * 100 / nrow(df),
+              mean = mean(PHQ4_Anxiety), 
+              SD = sd(PHQ4_Anxiety))
+    
+    names(country_summary)[1] <- "Category"
+    
+    sumtable <- rbind(age_group_summary, 
+                    gender_summary, 
+                    mental_health_summary,
+                    employment_summary,
+                    country_summary)
+  } else {
+    sumtable <- rbind(age_group_summary, 
+                    gender_summary, 
+                    mental_health_summary,
+                    employment_summary)
+  }
+  
+  sumtable <- sumtable %>%
+    mutate("Count (%)" = sprintf("%.0f (%.2f%%)", count, percentage)) %>%
+    mutate("M (SD)" = sprintf("%.2f (%.2f)", mean, SD))
+  
+  sumtable[c("Category", "Count (%)", "M (SD)")]
+}
+
+
+summary_binary_depression <- function(df) {
+  age_group_summary <- df %>% group_by(age_group) %>% summarise(count = n(),
+                                              percentage = count * 100 / nrow(df),
+                                              mean = mean(PHQ4_Depression), 
+                                              SD = sd(PHQ4_Depression))
+  
+  
+  gender_summary <- df %>% group_by(gender) %>% summarise(count = n(),
+                                             percentage = count * 100 / nrow(df),
+                                             mean = mean(PHQ4_Depression), 
+                                             SD = sd(PHQ4_Depression))
+  
+  mental_health_summary <- df %>% group_by(Have_Mental_health_condition) %>% 
+    summarise(count = n(),
+              percentage = count * 100 / nrow(df),
+              mean = mean(PHQ4_Depression), 
+              SD = sd(PHQ4_Depression))
+  
+  employment_summary <- df %>% group_by(employment_status) %>% 
+    summarise(count = n(),
+              percentage = count * 100 / nrow(df),
+              mean = mean(PHQ4_Depression), 
+              SD = sd(PHQ4_Depression))
+  
+  names(age_group_summary)[1] <- "Category"
+  names(gender_summary)[1] <- "Category"
+  names(mental_health_summary)[1] <- "Category"
+  names(employment_summary)[1] <- "Category"
+  
+  if ("country" %in% names(df)){
+    country_summary <- df %>% group_by(country) %>% 
+    summarise(count = n(),
+              percentage = count * 100 / nrow(df),
+              mean = mean(PHQ4_Depression), 
+              SD = sd(PHQ4_Depression))
+    
+    names(country_summary)[1] <- "Category"
+    
+    sumtable <- rbind(age_group_summary, 
+                    gender_summary, 
+                    mental_health_summary,
+                    employment_summary,
+                    country_summary)
+  } else {
+    sumtable <- rbind(age_group_summary, 
+                    gender_summary, 
+                    mental_health_summary,
+                    employment_summary)
+  }
+  
+  sumtable <- sumtable %>%
+    mutate("Count (%)" = sprintf("%.0f (%.2f%%)", count, percentage)) %>%
+    mutate("M (SD)" = sprintf("%.2f (%.2f)", mean, SD))
+  
+  sumtable[c("Category", "Count (%)", "M (SD)")]
+}
+
+
+```
+
+
+
+
+# Data cleaning
+```{r}
+# sg_full <- read.csv("C:/Users/nicgoh/Behavioural Study/YouGov Data/Cleaned data/singapore.csv")
+
+sg_full <- read.csv("D:/Users/nicgoh/Downloads/singapore.csv")
+
+
+
+sg_full <- sg_full %>% filter(PHQ4_1 != " " & 
+                                PHQ4_2 != " " & 
+                                PHQ4_3 != " "& 
+                                PHQ4_4 != " " &
+                              PHQ4_1 != "Prefer not to say" & 
+                                PHQ4_2 != "Prefer not to say" & 
+                                PHQ4_3 != "Prefer not to say"& 
+                                PHQ4_4 != "Prefer not to say")
+
+sg_full$PHQ4_1[sg_full$PHQ4_1 == "Not at all"] <- "0"
+sg_full$PHQ4_1[sg_full$PHQ4_1 == "Several days"] <- "1"
+sg_full$PHQ4_1[sg_full$PHQ4_1 == "More than half the days"] <- "2"
+sg_full$PHQ4_1[sg_full$PHQ4_1 == "Nearly every day"] <- "3"
+sg_full$PHQ4_1 <- as.numeric(sg_full$PHQ4_1)
+
+sg_full$PHQ4_2[sg_full$PHQ4_2 == "Not at all"] <- "0"
+sg_full$PHQ4_2[sg_full$PHQ4_2 == "Several days"] <- "1"
+sg_full$PHQ4_2[sg_full$PHQ4_2 == "More than half the days"] <- "2"
+sg_full$PHQ4_2[sg_full$PHQ4_2 == "Nearly every day"] <- "3"
+sg_full$PHQ4_2 <- as.numeric(sg_full$PHQ4_2)
+
+sg_full$PHQ4_3[sg_full$PHQ4_3 == "Not at all"] <- "0"
+sg_full$PHQ4_3[sg_full$PHQ4_3 == "Several days"] <- "1"
+sg_full$PHQ4_3[sg_full$PHQ4_3 == "More than half the days"] <- "2"
+sg_full$PHQ4_3[sg_full$PHQ4_3 == "Nearly every day"] <- "3"
+sg_full$PHQ4_3 <- as.numeric(sg_full$PHQ4_3)
+
+sg_full$PHQ4_4[sg_full$PHQ4_4 == "Not at all"] <- "0"
+sg_full$PHQ4_4[sg_full$PHQ4_4 == "Several days"] <- "1"
+sg_full$PHQ4_4[sg_full$PHQ4_4 == "More than half the days"] <- "2"
+sg_full$PHQ4_4[sg_full$PHQ4_4 == "Nearly every day"] <- "3"
+sg_full$PHQ4_4 <- as.numeric(sg_full$PHQ4_4)
+
+sg_full$PHQ4_Total_score = sg_full$PHQ4_1 + sg_full$PHQ4_2 + sg_full$PHQ4_3 + sg_full$PHQ4_4
+sg_full$PHQ4_Depression_score = sg_full$PHQ4_1 + sg_full$PHQ4_2
+sg_full$PHQ4_Anxiety_score = sg_full$PHQ4_3 + sg_full$PHQ4_4
+
+sg_full$PHQ4_Depression = sg_full$PHQ4_Depression_score
+sg_full <- sg_full %>%
+  mutate(PHQ4_Depression = case_when(
+    PHQ4_Depression < 3 ~ 0,
+    PHQ4_Depression >= 3 ~ 1))
+
+sg_full$PHQ4_Anxiety = sg_full$PHQ4_Anxiety_score
+sg_full <- sg_full %>%
+  mutate(PHQ4_Anxiety = case_when(
+    PHQ4_Anxiety < 3 ~ 0,
+    PHQ4_Anxiety >= 3 ~ 1))
+
+# Categorising age group
+breaks <- c(0, 29, 39, 49, 59, 1000)
+labels <- c("18-29", "30-39", "40-49", "50-59", "60+")
+sg_full$age_group <- as.numeric(as.character(sg_full$age))
+sg_full$age_group <- cut(sg_full$age_group, 
+                                                breaks = breaks, 
+                                                labels = labels, 
+                                                include.lowest = TRUE)
+
+
+# Categorizing employment status
+sg_full$employment_status[sg_full$employment_status == "Part time employment" | 
+                          sg_full$employment_status == "Full time student"] <- "Other"
+sg_full$employment_status[sg_full$employment_status == "Retired" | sg_full$employment_status == "Not working"] <- "Not working"
+
+
+# Categorizing vaccination status
+## question vac3_2: vaccine is NOT yet available to me
+sg_full$vacc_grouped <- sg_full$vac3_2
+sg_full$vacc_grouped <- as.character(sg_full$vacc_grouped)
+sg_full <- sg_full %>% mutate(vacc_grouped = case_when(
+  (vacc_grouped == " " | vacc_grouped == "Yes") ~ "Others",
+  vacc_grouped == "No" ~ "Yes"
+  ))
+
+sg_full$Have_Mental_health_condition <- sg_full$d1_health_12
+sg_full$Have_Mental_health_condition[sg_full$Have_Mental_health_condition == " "] <- "Prefer not to say"
+
+
+# Setting reference groups
+sg_full <- sg_full %>% mutate_if(is.character, as.factor)
+
+
+sg_full$employment_status <- relevel(sg_full$employment_status, 
+                                     ref = "Full time employment")
+sg_full$age_group <- relevel(sg_full$age_group, 
+                                     ref = "40-49")
+sg_full$gender <- relevel(sg_full$gender, 
+                          ref = "Female")
+
+sg_full$vacc_grouped <- relevel(sg_full$vacc_grouped, 
+                          ref = "Others")
+sg_full$Have_Mental_health_condition <- relevel(sg_full$Have_Mental_health_condition, 
+                                     ref = "No")
+
+```
+
+```{r}
+#Creating a variable for restriction periods
+sg_full[c('end_date', 'end_time')] <- str_split_fixed(sg_full$endtime,
+                                              ' ', 
+                                              2)
+sg_full <- sg_full %>% mutate(end_date = dmy(end_date))
+
+sg_full$measure <- sg_full$end_date
+sg_full <- sg_full %>%
+  mutate(measure = case_when(
+    measure <= (as.Date("2020-06-01")) ~ "Circuit Breaker",
+    measure > (as.Date("2020-06-01")) & measure <= (as.Date("2020-12-27")) ~ "Phase 1 and 2",
+    measure > (as.Date("2020-12-27")) & measure <= (as.Date("2021-05-07")) ~ "Phase 3",
+    measure > (as.Date("2021-05-07")) & measure <= (as.Date("2021-08-09")) ~ "Heightened alert",
+    measure > (as.Date("2021-08-09")) & measure <= (as.Date("2021-08-20")) ~ "Transition",
+    measure > (as.Date("2021-08-20")) ~ "Relaxed Border Restrictions"
+    ))
+sg_full$measure <- as.factor(sg_full$measure)
+sg_full$measure <- relevel(sg_full$measure, ref = "Circuit Breaker")
+
+measure_counts <- as.data.frame(sg_full %>% group_by(measure) %>% count)
+measure_counts %>%
+  mutate("Count (% of pop)" = sprintf("%.0f (%.2f%%)", n, n * 100/nrow(sg_full)))
+```
+
+# Descriptive Statistics
+
+```{r}
+summary_binary_depression(sg_full)
+summary_binary_anxiety(sg_full)
+summary_df(sg_full)
+```
+
+
+# Main Regressions 
+
+Grouping vaccine availability into "Yes" and "Others" since a non-response may indicate vaccine not yet rolled out / respondant is not aware of whether or not it is out, which has similar effects to the vaccine not being available to the individual
+
+## PHQ4 Total Score
+```{r}
+
+age18to29 <- sg_full %>% filter(age_group == "18-29")
+age30to39 <- sg_full %>% filter(age_group == "30-39")
+age40to49 <- sg_full %>% filter(age_group == "40-49")
+age50to59 <- sg_full %>% filter(age_group == "50-59")
+ageover60 <- sg_full %>% filter(age_group == "60+")
+# 
+table(sg_full$vacc_grouped)
+# table(sg_full$Vaccine_available)
+
+
+sg_measure_model_full <- lm(PHQ4_Total_score ~ measure + 
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           employment_status +
+                                           vacc_grouped + 
+                                           age_group,
+                                 data = sg_full,
+                                 weights = sg_full$weight)
+f <- CI_output_regression(sg_measure_model_full)
+
+sg_measure_model_age18to29adjusted <- lm(PHQ4_Total_score ~ measure + 
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           employment_status +
+                                           vacc_grouped,
+                                 data = age18to29,
+                                 weights = age18to29$weight)
+a <- CI_output_regression(sg_measure_model_age18to29adjusted)
+
+sg_measure_model_age30to39adjusted <- lm(PHQ4_Total_score ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status +
+                                   vacc_grouped,
+                                 data = age30to39,
+                                 weights = age30to39$weight)
+b <- CI_output_regression(sg_measure_model_age30to39adjusted)
+
+sg_measure_model_age40to49adjusted <- lm(PHQ4_Total_score ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status +
+                                   vacc_grouped,
+                                 data = age40to49,
+                                 weights = age40to49$weight)
+c <- CI_output_regression(sg_measure_model_age40to49adjusted)
+
+sg_measure_model_age50to59adjusted <- lm(PHQ4_Total_score ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status +
+                                   vacc_grouped,
+                                 data = age50to59,
+                                 weights = age50to59$weight)
+d <- CI_output_regression(sg_measure_model_age50to59adjusted)
+
+sg_measure_model_ageover60adjusted <- lm(PHQ4_Total_score ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status +
+                                   vacc_grouped,
+                                 data = ageover60,
+                                 weights = ageover60$weight)
+e <- CI_output_regression(sg_measure_model_ageover60adjusted)
+```
+
+## PHQ2 Significant Symptoms of Depression
+```{r}
+age18to29 <- sg_full %>% filter(age_group == "18-29")
+age30to39 <- sg_full %>% filter(age_group == "30-39")
+age40to49 <- sg_full %>% filter(age_group == "40-49")
+age50to59 <- sg_full %>% filter(age_group == "50-59")
+ageover60 <- sg_full %>% filter(age_group == "60+")
+# 
+# table(sg_full$vacc_grouped)
+# table(sg_full$Vaccine_available)
+
+sg_full$PHQ4_Depression <- as.numeric(sg_full$PHQ4_Depression)
+sg_full$PHQ4_Depression <- as.factor(sg_full$PHQ4_Depression)
+
+sg_measure_model_full <- glm(PHQ4_Depression ~ measure + 
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           employment_status +
+                                           vacc_grouped + 
+                                           age_group,
+                             family = binomial(),
+                                 data = sg_full,
+                                 weights = sg_full$weight)
+f <- CI_output(sg_measure_model_full)
+
+sg_measure_model_age18to29adjusted <- glm(PHQ4_Depression ~ measure + 
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           employment_status +
+                                           vacc_grouped,
+                             family = binomial(),
+                                 data = age18to29,
+                                 weights = age18to29$weight)
+a <- CI_output(sg_measure_model_age18to29adjusted)
+
+sg_measure_model_age30to39adjusted <- glm(PHQ4_Depression ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status +
+                                   vacc_grouped,
+                             family = binomial(),
+                                 data = age30to39,
+                                 weights = age30to39$weight)
+b <- CI_output(sg_measure_model_age30to39adjusted)
+
+sg_measure_model_age40to49adjusted <- glm(PHQ4_Depression ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status +
+                                   vacc_grouped,
+                             family = binomial(),
+                                 data = age40to49,
+                                 weights = age40to49$weight)
+c <- CI_output(sg_measure_model_age40to49adjusted)
+
+sg_measure_model_age50to59adjusted <- glm(PHQ4_Depression ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status +
+                                   vacc_grouped,
+                             family = binomial(),
+                                 data = age50to59,
+                                 weights = age50to59$weight)
+d <- CI_output(sg_measure_model_age50to59adjusted)
+
+sg_measure_model_ageover60adjusted <- glm(PHQ4_Depression ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status +
+                                   vacc_grouped,
+                             family = binomial(),
+                                 data = ageover60,
+                                 weights = ageover60$weight)
+e <- CI_output(sg_measure_model_ageover60adjusted)
+```
+
+
+## GAD2 Significant Symptoms of Anxiety
+```{r}
+age18to29 <- sg_full %>% filter(age_group == "18-29")
+age30to39 <- sg_full %>% filter(age_group == "30-39")
+age40to49 <- sg_full %>% filter(age_group == "40-49")
+age50to59 <- sg_full %>% filter(age_group == "50-59")
+ageover60 <- sg_full %>% filter(age_group == "60+")
+# 
+# table(sg_full$vacc_grouped)
+# table(sg_full$Vaccine_available)
+
+
+sg_measure_model_full <- glm(PHQ4_Anxiety ~ measure + 
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           employment_status +
+                                           vacc_grouped + 
+                                           age_group,
+                             family = binomial(),
+                                 data = sg_full,
+                                 weights = sg_full$weight)
+f <- CI_output(sg_measure_model_full)
+
+sg_measure_model_age18to29adjusted <- glm(PHQ4_Anxiety ~ measure + 
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           employment_status +
+                                           vacc_grouped,
+                             family = binomial(),
+                                 data = age18to29,
+                                 weights = age18to29$weight)
+a <- CI_output(sg_measure_model_age18to29adjusted)
+
+sg_measure_model_age30to39adjusted <- glm(PHQ4_Anxiety ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status +
+                                   vacc_grouped,
+                             family = binomial(),
+                                 data = age30to39,
+                                 weights = age30to39$weight)
+b <- CI_output(sg_measure_model_age30to39adjusted)
+
+sg_measure_model_age40to49adjusted <- glm(PHQ4_Anxiety ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status +
+                                   vacc_grouped,
+                             family = binomial(),
+                                 data = age40to49,
+                                 weights = age40to49$weight)
+c <- CI_output(sg_measure_model_age40to49adjusted)
+
+sg_measure_model_age50to59adjusted <- glm(PHQ4_Anxiety ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status +
+                                   vacc_grouped,
+                             family = binomial(),
+                                 data = age50to59,
+                                 weights = age50to59$weight)
+d <- CI_output(sg_measure_model_age50to59adjusted)
+
+sg_measure_model_ageover60adjusted <- glm(PHQ4_Anxiety ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status +
+                                   vacc_grouped,
+                             family = binomial(),
+                                 data = ageover60,
+                                 weights = ageover60$weight)
+e <- CI_output(sg_measure_model_ageover60adjusted)
+```
+
+
+# Supplementary Analyses (in SI)
+
+# Demographic breakdown by restriction period
+```{r}
+cb <- sg_full %>% filter(measure == "Circuit Breaker")
+p1p2 <- sg_full %>% filter(measure == "Phase 1 and 2")
+p3sd <- sg_full %>% filter(measure == "Phase 3")
+ha <- sg_full %>% filter(measure == "Heightened alert")
+transition <- sg_full %>% filter(measure == "Transition")
+relaxed_borders <- sg_full %>% filter(measure == "Relaxed Border Restrictions")
+
+
+
+a <- summary_df(cb)
+b <- summary_df(p1p2)
+c <- summary_df(p3sd)
+d <- summary_df(ha)
+e <- summary_df(transition)
+f <- summary_df(relaxed_borders)
+
+
+# sg_full %>% group_by(measure) %>% summarize(mean_stringency = mean())
+
+```
+
+# Model AIC Calculations
+```{r}
+
+measure_univar <- lm(PHQ4_Total_score ~ measure,
+                                 data = sg_full,
+                                 weights = sg_full$weight)
+
+
+measure_gender <- lm(PHQ4_Total_score ~ measure + gender,
+                                 data = sg_full,
+                                 weights = sg_full$weight)
+
+
+measure_gender_age <- lm(PHQ4_Total_score ~ measure + gender +
+                               age_group,
+                                 data = sg_full,
+                                 weights = sg_full$weight)
+
+
+measure_gender_age_employment <- lm(PHQ4_Total_score ~ measure + gender +
+                               age_group + employment_status,
+                                 data = sg_full,
+                                 weights = sg_full$weight)
+
+
+measure_gender_age_employment_mental_health <- lm(PHQ4_Total_score ~ measure + gender +
+                               age_group + employment_status +
+                               Have_Mental_health_condition,
+                                 data = sg_full,
+                                 weights = sg_full$weight)
+
+
+measure_gender_age_employment_mental_health_vacc <- lm(PHQ4_Total_score ~ measure + gender +
+                               age_group + employment_status +
+                               Have_Mental_health_condition + vacc_grouped,
+                                 data = sg_full,
+                                 weights = sg_full$weight)
+
+
+models <- list(measure_univar, 
+               measure_gender, 
+               measure_gender_age, 
+               measure_gender_age_employment, 
+               measure_gender_age_employment_mental_health,
+               measure_gender_age_employment_mental_health_vacc)
+
+
+AIC(measure_univar, 
+               measure_gender, 
+               measure_gender_age, 
+               measure_gender_age_employment, 
+               measure_gender_age_employment_mental_health,
+               measure_gender_age_employment_mental_health_vacc)
+```
+
+
+## Robustness check: regressions without vaccination status
+```{r}
+
+
+age18to29 <- sg_full %>% filter(age_group == "18-29")
+age30to39 <- sg_full %>% filter(age_group == "30-39")
+age40to49 <- sg_full %>% filter(age_group == "40-49")
+age50to59 <- sg_full %>% filter(age_group == "50-59")
+ageover60 <- sg_full %>% filter(age_group == "60+")
+# 
+# table(sg_full$vacc_grouped)
+# table(sg_full$Vaccine_available)
+
+
+sg_measure_model_full <- glm(PHQ4_Depression ~ measure + 
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           employment_status +
+                                           age_group,
+                             family = binomial(),
+                                 data = sg_full,
+                                 weights = sg_full$weight)
+f <- CI_output(sg_measure_model_full)
+
+sg_measure_model_age18to29adjusted <- glm(PHQ4_Depression ~ measure + 
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           employment_status,
+                             family = binomial(),
+                                 data = age18to29,
+                                 weights = age18to29$weight)
+a <- CI_output(sg_measure_model_age18to29adjusted)
+
+sg_measure_model_age30to39adjusted <- glm(PHQ4_Depression ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status,
+                             family = binomial(),
+                                 data = age30to39,
+                                 weights = age30to39$weight)
+b <- CI_output(sg_measure_model_age30to39adjusted)
+
+sg_measure_model_age40to49adjusted <- glm(PHQ4_Depression ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status,
+                             family = binomial(),
+                                 data = age40to49,
+                                 weights = age40to49$weight)
+c <- CI_output(sg_measure_model_age40to49adjusted)
+
+sg_measure_model_age50to59adjusted <- glm(PHQ4_Depression ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status,
+                             family = binomial(),
+                                 data = age50to59,
+                                 weights = age50to59$weight)
+d <- CI_output(sg_measure_model_age50to59adjusted)
+
+sg_measure_model_ageover60adjusted <- glm(PHQ4_Depression ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status,
+                             family = binomial(),
+                                 data = ageover60,
+                                 weights = ageover60$weight)
+e <- CI_output(sg_measure_model_ageover60adjusted)
+```
+
+```{r}
+
+
+age18to29 <- sg_full %>% filter(age_group == "18-29")
+age30to39 <- sg_full %>% filter(age_group == "30-39")
+age40to49 <- sg_full %>% filter(age_group == "40-49")
+age50to59 <- sg_full %>% filter(age_group == "50-59")
+ageover60 <- sg_full %>% filter(age_group == "60+")
+# 
+# table(sg_full$vacc_grouped)
+# table(sg_full$Vaccine_available)
+
+
+sg_measure_model_full <- glm(PHQ4_Depression ~ measure + 
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           employment_status +
+                                           age_group,
+                             family = binomial(),
+                                 data = sg_full,
+                                 weights = sg_full$weight)
+f <- CI_output(sg_measure_model_full)
+
+sg_measure_model_age18to29adjusted <- glm(PHQ4_Depression ~ measure + 
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           employment_status,
+                             family = binomial(),
+                                 data = age18to29,
+                                 weights = age18to29$weight)
+a <- CI_output(sg_measure_model_age18to29adjusted)
+
+sg_measure_model_age30to39adjusted <- glm(PHQ4_Depression ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status,
+                             family = binomial(),
+                                 data = age30to39,
+                                 weights = age30to39$weight)
+b <- CI_output(sg_measure_model_age30to39adjusted)
+
+sg_measure_model_age40to49adjusted <- glm(PHQ4_Depression ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status,
+                             family = binomial(),
+                                 data = age40to49,
+                                 weights = age40to49$weight)
+c <- CI_output(sg_measure_model_age40to49adjusted)
+
+sg_measure_model_age50to59adjusted <- glm(PHQ4_Depression ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status,
+                             family = binomial(),
+                                 data = age50to59,
+                                 weights = age50to59$weight)
+d <- CI_output(sg_measure_model_age50to59adjusted)
+
+sg_measure_model_ageover60adjusted <- glm(PHQ4_Depression ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status,
+                             family = binomial(),
+                                 data = ageover60,
+                                 weights = ageover60$weight)
+e <- CI_output(sg_measure_model_ageover60adjusted)
+```
+
+
+```{r}
+
+
+age18to29 <- sg_full %>% filter(age_group == "18-29")
+age30to39 <- sg_full %>% filter(age_group == "30-39")
+age40to49 <- sg_full %>% filter(age_group == "40-49")
+age50to59 <- sg_full %>% filter(age_group == "50-59")
+ageover60 <- sg_full %>% filter(age_group == "60+")
+# 
+# table(sg_full$vacc_grouped)
+# table(sg_full$Vaccine_available)
+
+
+sg_measure_model_full <- lm(PHQ4_Total_score ~ measure + 
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           employment_status +
+                                           age_group,
+                                 data = sg_full,
+                                 weights = sg_full$weight)
+f <- CI_output_regression(sg_measure_model_full)
+
+sg_measure_model_age18to29adjusted <- glm(PHQ4_Total_score ~ measure + 
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           employment_status,
+                                 data = age18to29,
+                                 weights = age18to29$weight)
+a <- CI_output_regression(sg_measure_model_age18to29adjusted)
+
+sg_measure_model_age30to39adjusted <- glm(PHQ4_Total_score ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status,
+                                 data = age30to39,
+                                 weights = age30to39$weight)
+b <- CI_output_regression(sg_measure_model_age30to39adjusted)
+
+sg_measure_model_age40to49adjusted <- glm(PHQ4_Total_score ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status,
+                                 data = age40to49,
+                                 weights = age40to49$weight)
+c <- CI_output_regression(sg_measure_model_age40to49adjusted)
+
+sg_measure_model_age50to59adjusted <- glm(PHQ4_Total_score ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status,
+                                 data = age50to59,
+                                 weights = age50to59$weight)
+d <- CI_output_regression(sg_measure_model_age50to59adjusted)
+
+sg_measure_model_ageover60adjusted <- glm(PHQ4_Total_score ~ measure + gender +
+                                 Have_Mental_health_condition + employment_status,
+                                 data = ageover60,
+                                 weights = ageover60$weight)
+e <- CI_output_regression(sg_measure_model_ageover60adjusted)
+```
+
+## Other Subgroup Analyses
+```{r}
+females <- sg_full %>% filter(gender == "Female")
+males <- sg_full %>% filter(gender == "Male")
+
+have_mental_health_condition <- sg_full %>% filter(Have_Mental_health_condition == "Yes")
+no_mental_health_condition <- sg_full %>% filter(Have_Mental_health_condition == "No")
+prefer_not_to_say_mental_health_condition <- sg_full %>% filter(Have_Mental_health_condition == "Prefer not to say")
+
+employed_full_time <- sg_full %>% filter(employment_status == "Full time employment")
+not_working <- sg_full %>% filter(employment_status == "Not working")
+unemployed <- sg_full %>% filter(employment_status == "Unemployed")
+other_employment <- sg_full %>% filter(employment_status == "Other")
+
+
+sg_measure_model <- lm(PHQ4_Total_score ~ measure + 
+                                           Have_Mental_health_condition + 
+                                           employment_status +
+                                           vacc_grouped + 
+                                           age_group,
+                                 data = females,
+                                 weights = females$weight)
+a <- CI_output_regression(sg_measure_model)
+
+sg_measure_model <- lm(PHQ4_Total_score ~ measure + 
+                                           Have_Mental_health_condition + 
+                                           employment_status +
+                                           vacc_grouped + 
+                                           age_group,
+                                 data = males,
+                                 weights = males$weight)
+b <- CI_output_regression(sg_measure_model)
+
+
+sg_measure_model <- lm(PHQ4_Total_score ~ measure + 
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           vacc_grouped + 
+                                           age_group,
+                                 data = employed_full_time,
+                                 weights = employed_full_time$weight)
+c <- CI_output_regression(sg_measure_model)
+
+sg_measure_model <- lm(PHQ4_Total_score ~ measure +  
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           vacc_grouped + 
+                                           age_group,
+                                 data = not_working,
+                                 weights = not_working$weight)
+d <- CI_output_regression(sg_measure_model)
+
+sg_measure_model <- lm(PHQ4_Total_score ~ measure +  
+                                           gender +
+                                           Have_Mental_health_condition +
+                                           vacc_grouped + 
+                                           age_group,
+                                 data = unemployed,
+                                 weights = unemployed$weight)
+e <- CI_output_regression(sg_measure_model)
+
+sg_measure_model <- lm(PHQ4_Total_score ~ measure +  
+                                           gender +
+                                           Have_Mental_health_condition + 
+                                           vacc_grouped + 
+                                           age_group,
+                                 data = other_employment,
+                                 weights = other_employment$weight)
+f <- CI_output_regression(sg_measure_model)
+
+
+sg_measure_model <- lm(PHQ4_Total_score ~ measure +  
+                                           gender + 
+                                           employment_status +
+                                           vacc_grouped + 
+                                           age_group,
+                                 data = have_mental_health_condition,
+                                 weights = have_mental_health_condition$weight)
+g <- CI_output_regression(sg_measure_model)
+
+sg_measure_model <- lm(PHQ4_Total_score ~ measure +  
+                                           gender +
+                                           employment_status +
+                                           vacc_grouped + 
+                                           age_group,
+                                 data = no_mental_health_condition,
+                                 weights = no_mental_health_condition$weight)
+h <- CI_output_regression(sg_measure_model)
+
+sg_measure_model <- lm(PHQ4_Total_score ~ measure +  
+                                           gender +
+                                           employment_status +
+                                           vacc_grouped + 
+                                           age_group,
+                                 data = prefer_not_to_say_mental_health_condition,
+                                 weights = prefer_not_to_say_mental_health_condition$weight)
+i <- CI_output_regression(sg_measure_model)
+
+```
+
+## Univariate analysis
+
+```{r}
+univariate_mod <- lm(PHQ4_Total_score ~ measure,
+                                 data = sg_full,
+                                 weights = sg_full$weight)
+CI_output_regression(univariate_mod)
+```
+
+
+# GAD-2 and PHQ-2 Breakdown Graphs
+```{r}
+library(ggplot2)
+library(RColorBrewer)
+
+#Anxiety
+
+anxiety_breakdown <- sg_full %>% group_by(PHQ4_Anxiety_score, measure) %>% 
+      summarize(count = n())
+anxiety_breakdown <- as.data.frame(anxiety_breakdown)
+
+anxiety_breakdown <- anxiety_breakdown %>%
+  arrange(PHQ4_Anxiety_score)
+
+anxiety_breakdown$measure <- as.factor(anxiety_breakdown$measure)
+
+anxiety_breakdown$PHQ4_Anxiety_score <- as.factor(anxiety_breakdown$PHQ4_Anxiety_score)
+
+anxiety_breakdown %>%
+  ggplot(aes(measure, count, color = PHQ4_Anxiety_score)) +
+  # geom_line() +
+  labs(title = "Changes in GAD-2 Responses Over Time", 
+       y="Number of Participants with Score") +
+  geom_line(
+    aes(
+      group = PHQ4_Anxiety_score
+    )
+  )+
+  scale_color_brewer(palette = "YlOrRd")
+
+
+#Depression
+
+Depression_breakdown <- sg_full %>% group_by(PHQ4_Depression_score, measure) %>% 
+      summarize(count = n())
+Depression_breakdown <- as.data.frame(Depression_breakdown)
+
+Depression_breakdown <- Depression_breakdown %>%
+  arrange(PHQ4_Depression_score)
+
+Depression_breakdown$measure <- as.factor(Depression_breakdown$measure)
+
+Depression_breakdown$PHQ4_Depression_score <- as.factor(Depression_breakdown$PHQ4_Depression_score)
+
+Depression_breakdown %>%
+  ggplot(aes(measure, count, color = PHQ4_Depression_score)) +
+  # geom_line() +
+  labs(title = "Changes in PHQ-2 Responses Over Time", 
+       y="Number of Participants with Score") +
+  geom_line(
+    aes(
+      group = PHQ4_Depression_score
+    )
+  )+
+  scale_color_brewer(palette = "YlOrRd")
+```
+
+
+
+
+
