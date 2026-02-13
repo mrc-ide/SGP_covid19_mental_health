@@ -1,0 +1,196 @@
+---
+title: "Mental Health Mediclaims"
+author: "Nicole Goh"
+date: "2025-08-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(data.table)
+library(flextable)
+```
+
+```{r load mediclaims datasets, eval=FALSE, include=FALSE}
+folder_path <- "P:/Co-Op 1/Datasets/12_Mediclaims/Mediclaims_DiagEpi"
+
+# Get a list of all dataset files in the folder
+mc_files <- list.files(path = folder_path, pattern = "*.csv", full.names = TRUE)
+
+# Initialise an empty list to store filtered datasets
+filtered_datasets <- list()
+
+# Loop through each dataset file
+for (file in mc_files) {
+  # Read the dataset
+  file_df <- fread(file)
+
+  # # Filter rows where df$uin is in df$uin
+  # filtered_df <- file_df %>%
+  #   filter(uin %in% df$uin)  # Ensure df is in the environment
+
+  # Store the filtered dataset in the list with the name of the file
+  filtered_datasets[[basename(file)]] <- file_df
+}
+```
+
+```{r rbind claims and epi dfs, eval=FALSE, include=FALSE}
+# Filter and combine data frames starting with "Epi"
+epi <- do.call(rbind, lapply(names(filtered_datasets), function(name) {
+  if (startsWith(name, "MediclaimsEpi")) {
+    return(filtered_datasets[[name]])
+  }
+}))
+
+# Filter and combine data frames starting with "Diag"
+diag <- do.call(rbind, lapply(names(filtered_datasets), function(name) {
+  if (startsWith(name, "MediclaimsDiag")) {
+    return(filtered_datasets[[name]])
+  }
+}))
+```
+
+```{r writing datasets, eval=FALSE, include=FALSE}
+write.csv(epi, "MediclaimsEpi_all.csv")
+write.csv(diag, "MediclaimsDiag_all.csv")
+```
+
+
+```{r}
+epi <- read.csv("MediclaimsEpi_all.csv")
+diag <- read.csv("MediclaimsDiag_all.csv")
+
+names(epi)
+names(diag)
+```
+
+
+```{r epi-diag merge}
+
+names(epi)
+epi <- epi %>% dplyr::select(-resident_type)
+epi_dedup <- epi %>% distinct()
+epi_dedup <- epi_dedup %>% distinct(pataccno, .keep_all = T)
+
+epi_dedup <- epi_dedup %>% dplyr::select(uin, pataccno, admission_date)
+
+MDdf <- left_join(epi_dedup, diag, by = c("pataccno", "uin"))
+backup_MDdf <- MDdf
+MDdf <- MDdf %>% distinct()
+
+sum(is.na(MDdf$admission_date))
+```
+
+```{r}
+MDdf$admission_date <- dmy(MDdf$admission_date)
+MDdf_core <- MDdf
+write.csv(MDdf, "MDdf_admissions.csv")
+```
+
+
+# Data cleaning
+```{r}
+MDdf_core <- read.csv("MDdf_admissions.csv")
+MDdf_core$admission_date <- ymd(MDdf_core$admission_date)
+min(MDdf_core$admission_date)
+max(MDdf_core$admission_date)
+
+MDdf <- MDdf_core %>% filter(admission_date >= as.Date("2015-01-01"))
+max(MDdf$admission_date)
+MDdf <- MDdf %>% filter(admission_date < as.Date("2024-01-01"))
+
+```
+
+```{r}
+write.csv(MDdf, "MDdf_admissions_2015to2023.csv")
+```
+
+
+# Past Diagnoses
+
+```{r}
+MDdf_core <- read.csv("MDdf_admissions.csv")
+MDdf_core$admission_date <- ymd(MDdf_core$admission_date)
+min(MDdf_core$admission_date)
+max(MDdf_core$admission_date)
+
+MDdf_core <- MDdf_core %>% filter(admission_date >= as.Date("2015-01-01"))
+min(MDdf_core$admission_date)
+MDdf <- MDdf_core %>% filter(admission_date < as.Date("2017-01-01"))
+gc()
+
+adhd_icd_list <- c("F900", "F901", "F902", "F908", "F909")
+
+behavioural_emotional_icd_list <- c("F630", "F631", "F632", "F633", "F638", "F639", 
+                                    "F910", "F918")
+
+eating_icd_list <- c("F500", "F501", "F502", "F508")
+
+mood_icd_list <- c("F30", "F31", "F32", "F33", "F340", "F341", "F348", "F349")
+
+stress_icd_list <- c("F430", "F431", "F432",
+                    "F410", "F411", "F413", "F418", "F419", 
+                    "F420")
+
+psychotic_icd_list <- c("F20", "F21", "F22", "F23", "F24", "F25", "F28", "F29")
+
+
+MDdf$diagcode <- as.character(MDdf$diagcode)
+
+MDdf$ICDMain <- substr(MDdf$diagcode, 0, 3)
+
+MDdf$ICDSpecific <- substr(MDdf$diagcode, 0, 5)
+MDdf$ICDMoreSpecific <- substr(MDdf$diagcode, 0, 6)
+
+
+past_MD_adhd <- MDdf %>% 
+  filter(ICDSpecific %in% adhd_icd_list |
+           ICDMain %in% adhd_icd_list) %>% 
+  dplyr::select(uin) %>% 
+  distinct()
+
+past_MD_behavioural_emotional <- MDdf %>% 
+  filter(ICDSpecific %in% behavioural_emotional_icd_list |
+           ICDMain %in% behavioural_emotional_icd_list) %>% 
+  dplyr::select(uin) %>% 
+  distinct()
+
+past_MD_eating <- MDdf %>% 
+  filter(ICDSpecific %in% eating_icd_list |
+           ICDMain %in% eating_icd_list) %>%
+  dplyr::select(uin) %>% 
+  distinct()
+
+past_MD_mood <- MDdf %>% 
+  filter(ICDSpecific %in% mood_icd_list |
+           ICDMain %in% mood_icd_list) %>% 
+  dplyr::select(uin) %>% 
+  distinct()
+
+past_MD_stress <- MDdf %>% 
+  filter(ICDSpecific %in% stress_icd_list |
+           ICDMain %in% stress_icd_list) %>% 
+  dplyr::select(uin) %>% 
+  distinct()
+
+past_MD_psychotic <- MDdf %>% 
+  filter(ICDSpecific %in% psychotic_icd_list |
+           ICDMain %in% psychotic_icd_list) %>% 
+  dplyr::select(uin) %>% 
+  distinct()
+
+write.csv(past_MD_adhd, "past_MD_adhd_from_2015.csv")
+write.csv(past_MD_behavioural_emotional, "past_MD_behavioural_emotional_from_2015.csv")
+write.csv(past_MD_eating, "past_MD_eating_from_2015.csv")
+write.csv(past_MD_mood, "past_MD_mood_from_2015.csv")
+write.csv(past_MD_stress, "past_MD_stress_from_2015.csv")
+write.csv(past_MD_psychotic, "past_MD_psychotic_from_2015.csv")
+```
+
+

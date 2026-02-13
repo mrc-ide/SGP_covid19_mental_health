@@ -1,0 +1,1462 @@
+---
+title: "Mental Health Mediclaims"
+author: "Nicole Goh"
+date: "2025-08-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(data.table)
+library(flextable)
+library(tidyverse)
+library(broom)
+library(patchwork)
+library(caret)
+library(gridExtra)
+library(stats)
+library(lmtest)
+library(MASS)
+library(openxlsx)
+
+options(scipen=999)
+```
+
+# Cleaning Function
+```{r}
+# tester <- CI_output(sg_measure_model_ageover60adjusted)
+CI_output <- function(model){
+    summary_model <- summary(model)
+    
+    p_values <- as.data.frame(summary_model$coefficients[, "Pr(>|z|)"])
+    p_values <- data.frame(term = rownames(p_values), p_values)
+    
+    coefficients <- coef(model)
+    
+    standard_errors <- summary(model)$coefficients[, "Std. Error"]
+
+    critical_value <- 1.96
+
+    lower_bound <- coefficients - critical_value * standard_errors
+    upper_bound <- coefficients + critical_value * standard_errors
+
+    confidence_intervals <- data.frame(
+      lower_bound = exp(lower_bound),
+      upper_bound = exp(upper_bound)
+    )
+    
+    coefficients <- exp(coefficients)
+    
+    # confidence_intervals <- data.frame(confint(model))
+    # colnames(confidence_intervals) <- c("lower_bound", "upper_bound")
+    
+    rownames(as.data.frame(coefficients))
+    output <- data.frame(term = rownames(as.data.frame(coefficients)), coefficients)
+    confidence_intervals <- data.frame(term = rownames(confidence_intervals), confidence_intervals)
+    output <- inner_join(output, confidence_intervals)
+    output <- inner_join(output, p_values)
+    output
+    output <- output %>% 
+      dplyr::select(term, coefficients, lower_bound, upper_bound, summary_model.coefficients....Pr...z....) %>%
+        mutate(estimate = round(coefficients, 2),
+               conf.low = round(lower_bound, 2),
+               conf.high = round(upper_bound, 2),
+               p.value = round(summary_model.coefficients....Pr...z...., 3)) %>%
+        mutate("OR (95% CI)" = sprintf("%.2f (%.2f, %.2f)", estimate, conf.low, conf.high)) %>% 
+        dplyr::select(term, `OR (95% CI)`, estimate, p.value)
+    
+    output
+}
+```
+
+# Dataset Set Up
+```{r}
+df <- read.csv("final_regression_df.csv")
+
+```
+
+```{r}
+
+
+gc()
+df$measure <- as.factor(df$measure)
+df$measure <- relevel(df$measure, ref = "2019")
+
+df$flattype <- as.factor(df$flattype)
+df$flattype <- relevel(df$flattype, ref = "4-Room")
+
+df$gender <- as.factor(df$gender)
+df$gender <- relevel(df$gender, ref = "Female")
+
+df$race <- as.factor(df$race)
+df$race <- relevel(df$race, ref = "Chinese")
+
+df$age_group <- as.factor(df$age_group)
+df$age_group <- relevel(df$age_group, ref = "30-39")
+
+df$cci <- as.factor(df$cci)
+df$cci <- relevel(df$cci, ref = "None")
+
+# names(df)
+
+sum(is.na(df$measuredays))
+# df$measuredays[df$measure == "Post-Stabilisation"] <- 249
+# sum(is.na(df$measuredays))
+```
+
+# First Incidence Full run
+
+
+```{r}
+df %>% group_by(age_group) %>% summarize(mean_mood = mean(mood_count, na.rm = TRUE) * 100000)
+df %>% group_by(age_group) %>% summarize(mean_stress = mean(stress_count, na.rm = TRUE) * 100000)
+df %>% group_by(age_group) %>% summarize(mean_psychosis = mean(psychotic_count, na.rm = TRUE) * 100000)
+```
+
+
+```{r}
+# table(df$cci)
+gc()
+sg_measure_model_full_nb <- glm.nb(mood_count_fi ~ 
+                             + measure
+                             + gender
+                             + race
+                             + flattype
+                             + age_group
+                             + cci
+                             + offset(log(measuredays)),
+                               data = df)
+b <- CI_output(sg_measure_model_full_nb)
+summary_nb <- summary(sg_measure_model_full_nb)
+AIC(sg_measure_model_full_nb)
+
+# b <- as.data.frame(summary_nb$coefficients)
+write.csv(b, "FINAL_first_incidence_from_2015_mood_count_full_negative_binomial.csv")
+summary_nb
+```
+
+```{r}
+gc()
+sg_measure_model_full_nb_stress <- glm.nb(stress_count_fi ~ 
+                             + measure
+                             + gender
+                             + race
+                             + flattype
+                             + age_group
+                             + cci
+                             + offset(log(measuredays)),
+                               data = df)
+c <- CI_output(sg_measure_model_full_nb_stress)
+summary_nb_stress <- summary(sg_measure_model_full_nb_stress)
+AIC(sg_measure_model_full_nb_stress)
+
+# b <- as.data.frame(summary_nb$coefficients)
+write.csv(c, "FINAL_first_incidence_from_2015_stress_count_full_negative_binomial.csv")
+summary_nb_stress
+```
+
+```{r}
+gc()
+sg_measure_model_full_nb_psychosis <- glm.nb(psychotic_count_fi ~ 
+                             + measure
+                             + gender
+                             + race
+                             + flattype
+                             + age_group
+                             + cci
+                             + offset(log(measuredays)),
+                               data = df)
+d <- CI_output(sg_measure_model_full_nb_psychosis)
+summary_nb_psychosis <- summary(sg_measure_model_full_nb_psychosis)
+AIC(sg_measure_model_full_nb_psychosis)
+
+# b <- as.data.frame(summary_nb$coefficients)
+write.csv(d, "FINAL_first_incidence_from_2015_psychotic_count_full_negative_binomial.csv")
+summary_nb_psychosis
+```
+
+```{r}
+mood_full <- read.csv("FINAL_first_incidence_from_2015_mood_count_full_negative_binomial.csv")
+stress_full <- read.csv("FINAL_first_incidence_from_2015_stress_count_full_negative_binomial.csv")
+psychotic_full <- read.csv("FINAL_first_incidence_from_2015_psychotic_count_full_negative_binomial.csv")
+
+formatting_full <- function(df) {
+  df$`OR..95..CI.`[df$p.value < 0.05] <- paste(
+  df$`OR..95..CI.`[df$p.value < 0.05],
+  "*")
+
+  flex_a <- flextable(df)
+
+  flex_a %>%
+    bg(i = ~ (p.value < 0.05) & (estimate < 1),
+       j = c("OR..95..CI."),
+       part = "body", bg = "#B6F4B6") %>%
+    bg(i = ~ (p.value < 0.05) & (estimate > 1),
+       j = c("OR..95..CI."),
+       part = "body", bg = "#FCE4D6")
+}
+
+library(flextable)
+formatting_full(mood_full)
+formatting_full(stress_full)
+formatting_full(psychotic_full)
+```
+
+
+
+
+# First Incidence Subgroup runs
+
+```{r}
+# df <- read.csv("regression_df.csv")
+
+
+gc()
+df$measure <- as.factor(df$measure)
+df$measure <- relevel(df$measure, ref = "2019")
+
+gc()
+
+df$flattype <- as.factor(df$flattype)
+df$flattype <- relevel(df$flattype, ref = "4-Room")
+
+age18to29 <- df %>% filter(age_group == "18-29")
+age30to39 <- df %>% filter(age_group == "30-39")
+age40to49 <- df %>% filter(age_group == "40-49")
+age50to59 <- df %>% filter(age_group == "50-59")
+over60 <- df %>% filter(age_group == "60+")
+
+age18to29$measure <- as.factor(age18to29$measure)
+age18to29$measure <- relevel(age18to29$measure, ref = "2019")
+
+age30to39$measure <- as.factor(age30to39$measure)
+age30to39$measure <- relevel(age30to39$measure, ref = "2019")
+
+age40to49$measure <- as.factor(age40to49$measure)
+age40to49$measure <- relevel(age40to49$measure, ref = "2019")
+
+age50to59$measure <- as.factor(age50to59$measure)
+age50to59$measure <- relevel(age50to59$measure, ref = "2019")
+
+over60$measure <- as.factor(over60$measure)
+over60$measure <- relevel(over60$measure, ref = "2019")
+```
+
+
+
+```{r}
+# mood
+gc()
+
+sg_measure_model_age18to29adjusted_mood <- glm.nb(mood_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + offset(log(measuredays)),
+                                 data = age18to29)
+c_mood_table <- CI_output(sg_measure_model_age18to29adjusted_mood)
+
+sg_measure_model_age30to39adjusted_mood <- glm.nb(mood_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + offset(log(measuredays)),
+                                 data = age30to39)
+d_mood_table <- CI_output(sg_measure_model_age30to39adjusted_mood)
+
+sg_measure_model_age40to49adjusted_mood <- glm.nb(mood_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + offset(log(measuredays)),
+                                 data = age40to49)
+e_mood_table <- CI_output(sg_measure_model_age40to49adjusted_mood)
+
+sg_measure_model_age50to59adjusted_mood <- glm.nb(mood_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + offset(log(measuredays)),
+                                 data = age50to59)
+f_mood_table <- CI_output(sg_measure_model_age50to59adjusted_mood)
+
+sg_measure_model_ageover60adjusted_mood <- glm.nb(mood_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + offset(log(measuredays)),
+                                 data = over60)
+g_mood_table <- CI_output(sg_measure_model_ageover60adjusted_mood)
+
+mood_summary <- full_join((c_mood_table), (d_mood_table), by = 'term')
+mood_summary <- full_join(mood_summary, (e_mood_table), by = 'term')
+mood_summary <- full_join(mood_summary, (f_mood_table), by = 'term')
+mood_summary <- full_join(mood_summary, (g_mood_table), by = 'term')
+write.csv(mood_summary, "FINAL_subgroups_mood_summary_nb_first_incident_from_2015_cleaned.csv")
+
+summary(sg_measure_model_age18to29adjusted_mood)
+summary(sg_measure_model_age30to39adjusted_mood)
+summary(sg_measure_model_age40to49adjusted_mood)
+summary(sg_measure_model_age50to59adjusted_mood)
+summary(sg_measure_model_ageover60adjusted_mood)
+
+
+# stress 
+gc()
+
+sg_measure_model_age18to29adjusted_stress <- glm.nb(stress_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + offset(log(measuredays)),
+                                 data = age18to29)
+c_stress_table <- CI_output(sg_measure_model_age18to29adjusted_stress)
+
+sg_measure_model_age30to39adjusted_stress <- glm.nb(stress_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + offset(log(measuredays)),
+                                 data = age30to39)
+d_stress_table <- CI_output(sg_measure_model_age30to39adjusted_stress)
+
+sg_measure_model_age40to49adjusted_stress <- glm.nb(stress_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + offset(log(measuredays)),
+                                 data = age40to49)
+e_stress_table <- CI_output(sg_measure_model_age40to49adjusted_stress)
+
+sg_measure_model_age50to59adjusted_stress <- glm.nb(stress_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + offset(log(measuredays)),
+                                 data = age50to59)
+f_stress_table <- CI_output(sg_measure_model_age50to59adjusted_stress)
+
+sg_measure_model_ageover60adjusted_stress <- glm.nb(stress_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             # + past_stress
+                             + offset(log(measuredays)),
+                                 data = over60)
+g_stress_table <- CI_output(sg_measure_model_ageover60adjusted_stress)
+
+stress_summary <- full_join((c_stress_table), (d_stress_table), by = 'term')
+stress_summary <- full_join(stress_summary, (e_stress_table), by = 'term')
+stress_summary <- full_join(stress_summary, (f_stress_table), by = 'term')
+stress_summary <- full_join(stress_summary, (g_stress_table), by = 'term')
+write.csv(stress_summary, "FINAL_subgroups_stress_summary_nb_first_incident_from_2015_cleaned.csv")
+
+summary(sg_measure_model_age18to29adjusted_stress)
+summary(sg_measure_model_age30to39adjusted_stress)
+summary(sg_measure_model_age40to49adjusted_stress)
+summary(sg_measure_model_age50to59adjusted_stress)
+summary(sg_measure_model_ageover60adjusted_stress)
+
+# psychotic 
+gc()
+
+sg_measure_model_age18to29adjusted_psychotic <- glm.nb(psychotic_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + offset(log(measuredays)),
+                                 data = age18to29)
+c_psychotic_table <- CI_output(sg_measure_model_age18to29adjusted_psychotic)
+
+sg_measure_model_age30to39adjusted_psychotic <- glm.nb(psychotic_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + offset(log(measuredays)),
+                                 data = age30to39)
+d_psychotic_table <- CI_output(sg_measure_model_age30to39adjusted_psychotic)
+
+sg_measure_model_age40to49adjusted_psychotic <- glm.nb(psychotic_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + offset(log(measuredays)),
+                                 data = age40to49)
+e_psychotic_table <- CI_output(sg_measure_model_age40to49adjusted_psychotic)
+
+sg_measure_model_age50to59adjusted_psychotic <- glm.nb(psychotic_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + offset(log(measuredays)),
+                                 data = age50to59)
+f_psychotic_table <- CI_output(sg_measure_model_age50to59adjusted_psychotic)
+
+sg_measure_model_ageover60adjusted_psychotic <- glm.nb(psychotic_count_fi ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + offset(log(measuredays)),
+                                 data = over60)
+g_psychotic_table <- CI_output(sg_measure_model_ageover60adjusted_psychotic)
+
+psychotic_summary <- full_join((c_psychotic_table), (d_psychotic_table), by = 'term')
+psychotic_summary <- full_join(psychotic_summary, (e_psychotic_table), by = 'term')
+psychotic_summary <- full_join(psychotic_summary, (f_psychotic_table), by = 'term')
+psychotic_summary <- full_join(psychotic_summary, (g_psychotic_table), by = 'term')
+write.csv(psychotic_summary, "FINAL_subgroups_psychotic_summary_nb_first_incident_from_2015_cleaned.csv")
+
+
+summary(sg_measure_model_age18to29adjusted_psychotic)
+summary(sg_measure_model_age30to39adjusted_psychotic)
+summary(sg_measure_model_age40to49adjusted_psychotic)
+summary(sg_measure_model_age50to59adjusted_psychotic)
+summary(sg_measure_model_ageover60adjusted_psychotic)
+```
+
+
+```{r}
+library(flextable)
+mood_summary <- read.csv("FINAL_subgroups_mood_summary_nb_first_incident_from_2015_cleaned.csv")
+stress_summary <- read.csv("FINAL_subgroups_stress_summary_nb_first_incident_from_2015_cleaned.csv")
+psychotic_summary <- read.csv("FINAL_subgroups_psychotic_summary_nb_first_incident_from_2015_cleaned.csv")
+
+formatter <- function(df){
+  df$`OR..95..CI.`[df$p.value < 0.05] <- paste(
+    df$`OR..95..CI.`[df$p.value < 0.05],
+    "*")
+  df$`OR..95..CI..x`[df$p.value.x < 0.05] <- paste(
+    df$`OR..95..CI..x`[df$p.value.x < 0.05],
+    "*")
+  df$`OR..95..CI..y`[df$p.value.y < 0.05] <- paste(
+    df$`OR..95..CI..y`[df$p.value.y < 0.05],
+    "*")
+  df$`OR..95..CI..x.x`[df$p.value.x.x < 0.05] <- paste(
+    df$`OR..95..CI..x.x`[df$p.value.x.x < 0.05],
+    "*")
+  df$`OR..95..CI..y.y`[df$p.value.y.y < 0.05] <- paste(
+    df$`OR..95..CI..y.y`[df$p.value.y.y < 0.05],
+    "*")
+  
+  flex_df <- flextable(df)
+  
+  flex_df %>%
+    bg(i = ~ (p.value < 0.05) & (estimate < 1),
+       j = c("OR..95..CI."),
+       part = "body", bg = "#B6F4B6") %>%
+    bg(i = ~ (p.value < 0.05) & (estimate > 1),
+       j = c("OR..95..CI."),
+       part = "body", bg = "#FCE4D6") %>%
+    bg(i = ~ (p.value.x < 0.05) & (estimate.x < 1),
+       j = c("OR..95..CI..x"),
+       part = "body", bg = "#B6F4B6") %>%
+    bg(i = ~ (p.value.x < 0.05) & (estimate.x > 1),
+       j = c("OR..95..CI..x"),
+       part = "body", bg = "#FCE4D6") %>%
+    bg(i = ~ (p.value.y < 0.05) & (estimate.y < 1),
+       j = c("OR..95..CI..y"),
+       part = "body", bg = "#B6F4B6") %>%
+    bg(i = ~ (p.value.y < 0.05) & (estimate.y > 1),
+       j = c("OR..95..CI..y"),
+       part = "body", bg = "#FCE4D6")%>%
+    bg(i = ~ (p.value.x.x < 0.05) & (estimate.x.x < 1),
+       j = c("OR..95..CI..x.x"),
+       part = "body", bg = "#B6F4B6") %>%
+    bg(i = ~ (p.value.x.x < 0.05) & (estimate.x.x > 1),
+       j = c("OR..95..CI..x.x"),
+       part = "body", bg = "#FCE4D6") %>%
+    bg(i = ~ (p.value.y.y < 0.05) & (estimate.y.y < 1),
+       j = c("OR..95..CI..y.y"),
+       part = "body", bg = "#B6F4B6") %>%
+    bg(i = ~ (p.value.y.y < 0.05) & (estimate.y.y > 1),
+       j = c("OR..95..CI..y.y"),
+       part = "body", bg = "#FCE4D6")
+}
+```
+
+
+# All (First Incident and Recurrent) Incidences Full Run
+
+## Cleaning
+
+```{r}
+df_use <- df %>% filter(mood_count > 0)
+df$past_mood <- 0
+df$past_mood[df$pre_2017_mood == 1] <- 1
+
+# df_2017 <- df_use %>% filter(measure == "2017")
+df_2018_past <- df_use %>% filter(measure == "2017")
+
+df_2019_past <- df_use %>% filter(measure == "2018" | 
+                                    measure == "2017")
+
+df_pre_cb_past <- df_use %>% filter(measure == "2019" | 
+                                      measure == "2018" | 
+                                      measure == "2017")
+
+df_cb_past <- df_use %>% filter(measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_p1p2_past <- df_use %>% filter(measure == "Circuit Breaker" | 
+                                    measure == "COVID Pre-CB" | 
+                                    measure == "2019" | 
+                                    measure == "2018" | 
+                                    measure == "2017")
+
+df_p3_past <- df_use %>% filter(measure == "Phases 1 and 2" | 
+                                  measure == "Circuit Breaker" | 
+                                  measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_ha_past <- df_use %>% filter(measure == "Phase 3" | 
+                                  measure == "Phases 1 and 2" | 
+                                  measure == "Circuit Breaker" | 
+                                  measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_d_past <- df_use %>% filter(measure == "Heightened Alert" | 
+                                 measure == "Phase 3" | 
+                                 measure == "Phases 1 and 2" | 
+                                 measure == "Circuit Breaker" | 
+                                 measure == "COVID Pre-CB" | 
+                                 measure == "2019" | 
+                                 measure == "2018" | 
+                                 measure == "2017")
+
+df_dt_past <- df_use %>% filter(measure == "Dining" | 
+                                  measure == "Heightened Alert" | 
+                                  measure == "Phase 3" | 
+                                  measure == "Phases 1 and 2" | 
+                                  measure == "Circuit Breaker" | 
+                                  measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_s_past <- df_use %>% filter(measure == "Dining and Travel" | 
+                                 measure == "Dining" | 
+                                 measure == "Heightened Alert" | 
+                                 measure == "Phase 3" | 
+                                 measure == "Phases 1 and 2" | 
+                                 measure == "Circuit Breaker" | 
+                                 measure == "COVID Pre-CB" | 
+                                 measure == "2019" | 
+                                 measure == "2018" | 
+                                 measure == "2017")
+
+df_ps_past <- df_use %>% filter(measure == "Stabilisation Phase" | 
+                                  measure == "Dining and Travel" | 
+                                  measure == "Dining" | 
+                                  measure == "Heightened Alert" | 
+                                  measure == "Phase 3" | 
+                                  measure == "Phases 1 and 2" | 
+                                  measure == "Circuit Breaker" | 
+                                  measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_2023_past <- df_use %>% filter(measure == "Post-Stabilisation" | 
+                                    measure == "Stabilisation Phase" | 
+                                    measure == "Dining and Travel" | 
+                                    measure == "Dining" | 
+                                    measure == "Heightened Alert" | 
+                                    measure == "Phase 3" | 
+                                    measure == "Phases 1 and 2" | 
+                                    measure == "Circuit Breaker" | 
+                                    measure == "COVID Pre-CB" | 
+                                    measure == "2019" | 
+                                    measure == "2018" | 
+                                    measure == "2017")
+
+
+df$past_mood[(df$measure== "2018") & (df$uin %in% df_2018_past$uin)] <- 1
+df$past_mood[(df$measure== "2019") & (df$uin %in% df_2019_past$uin)] <- 1
+df$past_mood[(df$measure== "COVID Pre-CB") & (df$uin %in% df_pre_cb_past$uin)] <- 1
+df$past_mood[(df$measure== "Circuit Breaker") & (df$uin %in% df_cb_past$uin)] <- 1
+df$past_mood[(df$measure== "Phases 1 and 2") & (df$uin %in% df_p1p2_past$uin)] <- 1
+df$past_mood[(df$measure== "Phase 3") & (df$uin %in% df_p3_past$uin)] <- 1
+df$past_mood[(df$measure== "Heightened Alert") & (df$uin %in% df_ha_past$uin)] <- 1
+df$past_mood[(df$measure== "Dining") & (df$uin %in% df_d_past$uin)] <- 1
+df$past_mood[(df$measure== "Dining and Travel") & (df$uin %in% df_dt_past$uin)] <- 1
+df$past_mood[(df$measure== "Stabilisation Phase") & (df$uin %in% df_s_past$uin)] <- 1
+df$past_mood[(df$measure== "Post-Stabilisation") & (df$uin %in% df_ps_past$uin)] <- 1
+df$past_mood[(df$measure== "2023") & (df$uin %in% df_2023_past$uin)] <- 1
+
+table(df$pre_2017_mood)
+table(df$past_mood)
+table(df$mood_count_fi)
+```
+
+
+```{r}
+df_use <- df %>% filter(stress_count > 0)
+df$past_stress <- 0
+df$past_stress[df$pre_2017_stress == 1] <- 1
+
+# df_2017 <- df_use %>% filter(measure == "2017")
+df_2018_past <- df_use %>% filter(measure == "2017")
+
+df_2019_past <- df_use %>% filter(measure == "2018" | 
+                                    measure == "2017")
+
+df_pre_cb_past <- df_use %>% filter(measure == "2019" | 
+                                      measure == "2018" | 
+                                      measure == "2017")
+
+df_cb_past <- df_use %>% filter(measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_p1p2_past <- df_use %>% filter(measure == "Circuit Breaker" | 
+                                    measure == "COVID Pre-CB" | 
+                                    measure == "2019" | 
+                                    measure == "2018" | 
+                                    measure == "2017")
+
+df_p3_past <- df_use %>% filter(measure == "Phases 1 and 2" | 
+                                  measure == "Circuit Breaker" | 
+                                  measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_ha_past <- df_use %>% filter(measure == "Phase 3" | 
+                                  measure == "Phases 1 and 2" | 
+                                  measure == "Circuit Breaker" | 
+                                  measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_d_past <- df_use %>% filter(measure == "Heightened Alert" | 
+                                 measure == "Phase 3" | 
+                                 measure == "Phases 1 and 2" | 
+                                 measure == "Circuit Breaker" | 
+                                 measure == "COVID Pre-CB" | 
+                                 measure == "2019" | 
+                                 measure == "2018" | 
+                                 measure == "2017")
+
+df_dt_past <- df_use %>% filter(measure == "Dining" | 
+                                  measure == "Heightened Alert" | 
+                                  measure == "Phase 3" | 
+                                  measure == "Phases 1 and 2" | 
+                                  measure == "Circuit Breaker" | 
+                                  measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_s_past <- df_use %>% filter(measure == "Dining and Travel" | 
+                                 measure == "Dining" | 
+                                 measure == "Heightened Alert" | 
+                                 measure == "Phase 3" | 
+                                 measure == "Phases 1 and 2" | 
+                                 measure == "Circuit Breaker" | 
+                                 measure == "COVID Pre-CB" | 
+                                 measure == "2019" | 
+                                 measure == "2018" | 
+                                 measure == "2017")
+
+df_ps_past <- df_use %>% filter(measure == "Stabilisation Phase" | 
+                                  measure == "Dining and Travel" | 
+                                  measure == "Dining" | 
+                                  measure == "Heightened Alert" | 
+                                  measure == "Phase 3" | 
+                                  measure == "Phases 1 and 2" | 
+                                  measure == "Circuit Breaker" | 
+                                  measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_2023_past <- df_use %>% filter(measure == "Post-Stabilisation" | 
+                                    measure == "Stabilisation Phase" | 
+                                    measure == "Dining and Travel" | 
+                                    measure == "Dining" | 
+                                    measure == "Heightened Alert" | 
+                                    measure == "Phase 3" | 
+                                    measure == "Phases 1 and 2" | 
+                                    measure == "Circuit Breaker" | 
+                                    measure == "COVID Pre-CB" | 
+                                    measure == "2019" | 
+                                    measure == "2018" | 
+                                    measure == "2017")
+
+
+df$past_stress[(df$measure== "2018") & (df$uin %in% df_2018_past$uin)] <- 1
+df$past_stress[(df$measure== "2019") & (df$uin %in% df_2019_past$uin)] <- 1
+df$past_stress[(df$measure== "COVID Pre-CB") & (df$uin %in% df_pre_cb_past$uin)] <- 1
+df$past_stress[(df$measure== "Circuit Breaker") & (df$uin %in% df_cb_past$uin)] <- 1
+df$past_stress[(df$measure== "Phases 1 and 2") & (df$uin %in% df_p1p2_past$uin)] <- 1
+df$past_stress[(df$measure== "Phase 3") & (df$uin %in% df_p3_past$uin)] <- 1
+df$past_stress[(df$measure== "Heightened Alert") & (df$uin %in% df_ha_past$uin)] <- 1
+df$past_stress[(df$measure== "Dining") & (df$uin %in% df_d_past$uin)] <- 1
+df$past_stress[(df$measure== "Dining and Travel") & (df$uin %in% df_dt_past$uin)] <- 1
+df$past_stress[(df$measure== "Stabilisation Phase") & (df$uin %in% df_s_past$uin)] <- 1
+df$past_stress[(df$measure== "Post-Stabilisation") & (df$uin %in% df_ps_past$uin)] <- 1
+df$past_stress[(df$measure== "2023") & (df$uin %in% df_2023_past$uin)] <- 1
+
+table(df$pre_2017_stress)
+table(df$past_stress)
+table(df$stress_count_fi)
+```
+
+```{r}
+df_use <- df %>% filter(psychotic_count > 0)
+df$past_psychotic <- 0
+df$past_psychotic[df$pre_2017_psychotic == 1] <- 1
+
+# df_2017 <- df_use %>% filter(measure == "2017")
+df_2018_past <- df_use %>% filter(measure == "2017")
+
+df_2019_past <- df_use %>% filter(measure == "2018" | 
+                                    measure == "2017")
+
+df_pre_cb_past <- df_use %>% filter(measure == "2019" | 
+                                      measure == "2018" | 
+                                      measure == "2017")
+
+df_cb_past <- df_use %>% filter(measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_p1p2_past <- df_use %>% filter(measure == "Circuit Breaker" | 
+                                    measure == "COVID Pre-CB" | 
+                                    measure == "2019" | 
+                                    measure == "2018" | 
+                                    measure == "2017")
+
+df_p3_past <- df_use %>% filter(measure == "Phases 1 and 2" | 
+                                  measure == "Circuit Breaker" | 
+                                  measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_ha_past <- df_use %>% filter(measure == "Phase 3" | 
+                                  measure == "Phases 1 and 2" | 
+                                  measure == "Circuit Breaker" | 
+                                  measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_d_past <- df_use %>% filter(measure == "Heightened Alert" | 
+                                 measure == "Phase 3" | 
+                                 measure == "Phases 1 and 2" | 
+                                 measure == "Circuit Breaker" | 
+                                 measure == "COVID Pre-CB" | 
+                                 measure == "2019" | 
+                                 measure == "2018" | 
+                                 measure == "2017")
+
+df_dt_past <- df_use %>% filter(measure == "Dining" | 
+                                  measure == "Heightened Alert" | 
+                                  measure == "Phase 3" | 
+                                  measure == "Phases 1 and 2" | 
+                                  measure == "Circuit Breaker" | 
+                                  measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_s_past <- df_use %>% filter(measure == "Dining and Travel" | 
+                                 measure == "Dining" | 
+                                 measure == "Heightened Alert" | 
+                                 measure == "Phase 3" | 
+                                 measure == "Phases 1 and 2" | 
+                                 measure == "Circuit Breaker" | 
+                                 measure == "COVID Pre-CB" | 
+                                 measure == "2019" | 
+                                 measure == "2018" | 
+                                 measure == "2017")
+
+df_ps_past <- df_use %>% filter(measure == "Stabilisation Phase" | 
+                                  measure == "Dining and Travel" | 
+                                  measure == "Dining" | 
+                                  measure == "Heightened Alert" | 
+                                  measure == "Phase 3" | 
+                                  measure == "Phases 1 and 2" | 
+                                  measure == "Circuit Breaker" | 
+                                  measure == "COVID Pre-CB" | 
+                                  measure == "2019" | 
+                                  measure == "2018" | 
+                                  measure == "2017")
+
+df_2023_past <- df_use %>% filter(measure == "Post-Stabilisation" | 
+                                    measure == "Stabilisation Phase" | 
+                                    measure == "Dining and Travel" | 
+                                    measure == "Dining" | 
+                                    measure == "Heightened Alert" | 
+                                    measure == "Phase 3" | 
+                                    measure == "Phases 1 and 2" | 
+                                    measure == "Circuit Breaker" | 
+                                    measure == "COVID Pre-CB" | 
+                                    measure == "2019" | 
+                                    measure == "2018" | 
+                                    measure == "2017")
+
+
+df$past_psychotic[(df$measure== "2018") & (df$uin %in% df_2018_past$uin)] <- 1
+df$past_psychotic[(df$measure== "2019") & (df$uin %in% df_2019_past$uin)] <- 1
+df$past_psychotic[(df$measure== "COVID Pre-CB") & (df$uin %in% df_pre_cb_past$uin)] <- 1
+df$past_psychotic[(df$measure== "Circuit Breaker") & (df$uin %in% df_cb_past$uin)] <- 1
+df$past_psychotic[(df$measure== "Phases 1 and 2") & (df$uin %in% df_p1p2_past$uin)] <- 1
+df$past_psychotic[(df$measure== "Phase 3") & (df$uin %in% df_p3_past$uin)] <- 1
+df$past_psychotic[(df$measure== "Heightened Alert") & (df$uin %in% df_ha_past$uin)] <- 1
+df$past_psychotic[(df$measure== "Dining") & (df$uin %in% df_d_past$uin)] <- 1
+df$past_psychotic[(df$measure== "Dining and Travel") & (df$uin %in% df_dt_past$uin)] <- 1
+df$past_psychotic[(df$measure== "Stabilisation Phase") & (df$uin %in% df_s_past$uin)] <- 1
+df$past_psychotic[(df$measure== "Post-Stabilisation") & (df$uin %in% df_ps_past$uin)] <- 1
+df$past_psychotic[(df$measure== "2023") & (df$uin %in% df_2023_past$uin)] <- 1
+
+table(df$pre_2017_psychotic)
+table(df$past_psychotic)
+table(df$psychotic_count_fi)
+```
+
+```{r}
+# table(df$cci)
+gc()
+sg_measure_model_full_nb <- glm.nb(mood_count ~ 
+                             + measure
+                             + gender
+                             + race
+                             + flattype
+                             + age_group
+                             + cci
+                             + past_mood
+                             + offset(log(measuredays)),
+                               data = df)
+b <- CI_output(sg_measure_model_full_nb)
+summary_nb <- summary(sg_measure_model_full_nb)
+AIC(sg_measure_model_full_nb)
+
+# b <- as.data.frame(summary_nb$coefficients)
+write.csv(b, "FINAL_all_incidences_from_2015_mood_count_full_negative_binomial.csv")
+summary_nb
+```
+
+```{r}
+gc()
+sg_measure_model_full_nb_stress <- glm.nb(stress_count ~ 
+                             + measure
+                             + gender
+                             + race
+                             + flattype
+                             + age_group
+                             + cci
+                             + past_stress
+                             + offset(log(measuredays)),
+                               data = df)
+c <- CI_output(sg_measure_model_full_nb_stress)
+summary_nb_stress <- summary(sg_measure_model_full_nb_stress)
+AIC(sg_measure_model_full_nb_stress)
+
+# b <- as.data.frame(summary_nb$coefficients)
+write.csv(c, "FINAL_all_incidences_from_2015_stress_count_full_negative_binomial.csv")
+summary_nb_stress
+```
+
+```{r}
+gc()
+sg_measure_model_full_nb_psychosis <- glm.nb(psychotic_count ~ 
+                             + measure
+                             + gender
+                             + race
+                             + flattype
+                             + age_group
+                             + cci
+                             + past_psychotic
+                             + offset(log(measuredays)),
+                               data = df)
+d <- CI_output(sg_measure_model_full_nb_psychosis)
+summary_nb_psychosis <- summary(sg_measure_model_full_nb_psychosis)
+AIC(sg_measure_model_full_nb_psychosis)
+
+# b <- as.data.frame(summary_nb$coefficients)
+write.csv(d, "FINAL_all_incidences_from_2015_psychotic_count_full_negative_binomial.csv")
+summary_nb_psychosis
+```
+
+
+
+```{r}
+mood_full <- read.csv("FINAL_all_incidences_from_2015_mood_count_full_negative_binomial.csv")
+stress_full <- read.csv("FINAL_all_incidences_from_2015_stress_count_full_negative_binomial.csv")
+psychotic_full <- read.csv("FINAL_all_incidences_from_2015_psychotic_count_full_negative_binomial.csv")
+
+formatting_full <- function(df) {
+  df$`OR..95..CI.`[df$p.value < 0.05] <- paste(
+  df$`OR..95..CI.`[df$p.value < 0.05],
+  "*")
+
+  flex_a <- flextable(df)
+
+  flex_a %>%
+    bg(i = ~ (p.value < 0.05) & (estimate < 1),
+       j = c("OR..95..CI."),
+       part = "body", bg = "#B6F4B6") %>%
+    bg(i = ~ (p.value < 0.05) & (estimate > 1),
+       j = c("OR..95..CI."),
+       part = "body", bg = "#FCE4D6")
+}
+
+library(flextable)
+formatting_full(mood_full)
+formatting_full(stress_full)
+formatting_full(psychotic_full)
+```
+
+# All (First Incident and Recurrent) Incidences Subgroup runs
+
+```{r}
+# df <- read.csv("regression_df.csv")
+
+
+gc()
+df$measure <- as.factor(df$measure)
+df$measure <- relevel(df$measure, ref = "2019")
+
+gc()
+
+df$flattype <- as.factor(df$flattype)
+df$flattype <- relevel(df$flattype, ref = "4-Room")
+
+age18to29 <- df %>% filter(age_group == "18-29")
+age30to39 <- df %>% filter(age_group == "30-39")
+age40to49 <- df %>% filter(age_group == "40-49")
+age50to59 <- df %>% filter(age_group == "50-59")
+over60 <- df %>% filter(age_group == "60+")
+
+age18to29$measure <- as.factor(age18to29$measure)
+age18to29$measure <- relevel(age18to29$measure, ref = "2019")
+
+age30to39$measure <- as.factor(age30to39$measure)
+age30to39$measure <- relevel(age30to39$measure, ref = "2019")
+
+age40to49$measure <- as.factor(age40to49$measure)
+age40to49$measure <- relevel(age40to49$measure, ref = "2019")
+
+age50to59$measure <- as.factor(age50to59$measure)
+age50to59$measure <- relevel(age50to59$measure, ref = "2019")
+
+over60$measure <- as.factor(over60$measure)
+over60$measure <- relevel(over60$measure, ref = "2019")
+```
+
+
+
+```{r}
+# mood
+gc()
+
+sg_measure_model_age18to29adjusted_mood <- glm.nb(mood_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_mood
+                             + offset(log(measuredays)),
+                                 data = age18to29)
+c_mood_table <- CI_output(sg_measure_model_age18to29adjusted_mood)
+
+sg_measure_model_age30to39adjusted_mood <- glm.nb(mood_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_mood
+                             + offset(log(measuredays)),
+                                 data = age30to39)
+d_mood_table <- CI_output(sg_measure_model_age30to39adjusted_mood)
+
+sg_measure_model_age40to49adjusted_mood <- glm.nb(mood_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_mood
+                             + offset(log(measuredays)),
+                                 data = age40to49)
+e_mood_table <- CI_output(sg_measure_model_age40to49adjusted_mood)
+
+sg_measure_model_age50to59adjusted_mood <- glm.nb(mood_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_mood
+                             + offset(log(measuredays)),
+                                 data = age50to59)
+f_mood_table <- CI_output(sg_measure_model_age50to59adjusted_mood)
+
+sg_measure_model_ageover60adjusted_mood <- glm.nb(mood_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_mood
+                             + offset(log(measuredays)),
+                                 data = over60)
+g_mood_table <- CI_output(sg_measure_model_ageover60adjusted_mood)
+
+mood_summary <- full_join((c_mood_table), (d_mood_table), by = 'term')
+mood_summary <- full_join(mood_summary, (e_mood_table), by = 'term')
+mood_summary <- full_join(mood_summary, (f_mood_table), by = 'term')
+mood_summary <- full_join(mood_summary, (g_mood_table), by = 'term')
+write.csv(mood_summary, "FINAL_subgroups_mood_summary_nb_all_incidences_from_2015_cleaned.csv")
+
+summary(sg_measure_model_age18to29adjusted_mood)
+summary(sg_measure_model_age30to39adjusted_mood)
+summary(sg_measure_model_age40to49adjusted_mood)
+summary(sg_measure_model_age50to59adjusted_mood)
+summary(sg_measure_model_ageover60adjusted_mood)
+
+
+# stress 
+gc()
+
+sg_measure_model_age18to29adjusted_stress <- glm.nb(stress_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_stress
+                             + offset(log(measuredays)),
+                                 data = age18to29)
+c_stress_table <- CI_output(sg_measure_model_age18to29adjusted_stress)
+
+sg_measure_model_age30to39adjusted_stress <- glm.nb(stress_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_stress
+                             + offset(log(measuredays)),
+                                 data = age30to39)
+d_stress_table <- CI_output(sg_measure_model_age30to39adjusted_stress)
+
+sg_measure_model_age40to49adjusted_stress <- glm.nb(stress_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_stress
+                             + offset(log(measuredays)),
+                                 data = age40to49)
+e_stress_table <- CI_output(sg_measure_model_age40to49adjusted_stress)
+
+sg_measure_model_age50to59adjusted_stress <- glm.nb(stress_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_stress
+                             + offset(log(measuredays)),
+                                 data = age50to59)
+f_stress_table <- CI_output(sg_measure_model_age50to59adjusted_stress)
+
+sg_measure_model_ageover60adjusted_stress <- glm.nb(stress_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_stress
+                             + offset(log(measuredays)),
+                                 data = over60)
+g_stress_table <- CI_output(sg_measure_model_ageover60adjusted_stress)
+
+stress_summary <- full_join((c_stress_table), (d_stress_table), by = 'term')
+stress_summary <- full_join(stress_summary, (e_stress_table), by = 'term')
+stress_summary <- full_join(stress_summary, (f_stress_table), by = 'term')
+stress_summary <- full_join(stress_summary, (g_stress_table), by = 'term')
+write.csv(stress_summary, "FINAL_subgroups_stress_summary_nb_all_incidences_from_2015_cleaned.csv")
+
+summary(sg_measure_model_age18to29adjusted_stress)
+summary(sg_measure_model_age30to39adjusted_stress)
+summary(sg_measure_model_age40to49adjusted_stress)
+summary(sg_measure_model_age50to59adjusted_stress)
+summary(sg_measure_model_ageover60adjusted_stress)
+
+# psychotic 
+gc()
+
+sg_measure_model_age18to29adjusted_psychotic <- glm.nb(psychotic_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_psychotic
+                             + offset(log(measuredays)),
+                                 data = age18to29)
+c_psychotic_table <- CI_output(sg_measure_model_age18to29adjusted_psychotic)
+
+sg_measure_model_age30to39adjusted_psychotic <- glm.nb(psychotic_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_psychotic
+                             + offset(log(measuredays)),
+                                 data = age30to39)
+d_psychotic_table <- CI_output(sg_measure_model_age30to39adjusted_psychotic)
+
+sg_measure_model_age40to49adjusted_psychotic <- glm.nb(psychotic_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_psychotic
+                             + offset(log(measuredays)),
+                                 data = age40to49)
+e_psychotic_table <- CI_output(sg_measure_model_age40to49adjusted_psychotic)
+
+sg_measure_model_age50to59adjusted_psychotic <- glm.nb(psychotic_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_psychotic
+                             + offset(log(measuredays)),
+                                 data = age50to59)
+f_psychotic_table <- CI_output(sg_measure_model_age50to59adjusted_psychotic)
+
+sg_measure_model_ageover60adjusted_psychotic <- glm.nb(psychotic_count ~ measure
+                             + gender
+                             + race
+                             + flattype
+                             + cci
+                             + past_psychotic
+                             + offset(log(measuredays)),
+                                 data = over60)
+g_psychotic_table <- CI_output(sg_measure_model_ageover60adjusted_psychotic)
+
+psychotic_summary <- full_join((c_psychotic_table), (d_psychotic_table), by = 'term')
+psychotic_summary <- full_join(psychotic_summary, (e_psychotic_table), by = 'term')
+psychotic_summary <- full_join(psychotic_summary, (f_psychotic_table), by = 'term')
+psychotic_summary <- full_join(psychotic_summary, (g_psychotic_table), by = 'term')
+write.csv(psychotic_summary, "FINAL_subgroups_psychotic_summary_nb_all_incidences_from_2015_cleaned.csv")
+
+
+summary(sg_measure_model_age18to29adjusted_psychotic)
+summary(sg_measure_model_age30to39adjusted_psychotic)
+summary(sg_measure_model_age40to49adjusted_psychotic)
+summary(sg_measure_model_age50to59adjusted_psychotic)
+summary(sg_measure_model_ageover60adjusted_psychotic)
+```
+
+
+```{r}
+library(flextable)
+# psychotic_summary_nb_all_incidences_from_2015_cleaned.csv
+mood_summary <- read.csv("FINAL_subgroups_mood_summary_nb_all_incidences_from_2015_cleaned.csv")
+stress_summary <- read.csv("FINAL_subgroups_stress_summary_nb_all_incidences_from_2015_cleaned.csv")
+psychotic_summary <- read.csv("FINAL_subgroups_psychotic_summary_nb_all_incidences_from_2015_cleaned.csv")
+
+formatter <- function(df){
+  df$`OR..95..CI.`[df$p.value < 0.05] <- paste(
+    df$`OR..95..CI.`[df$p.value < 0.05],
+    "*")
+  df$`OR..95..CI..x`[df$p.value.x < 0.05] <- paste(
+    df$`OR..95..CI..x`[df$p.value.x < 0.05],
+    "*")
+  df$`OR..95..CI..y`[df$p.value.y < 0.05] <- paste(
+    df$`OR..95..CI..y`[df$p.value.y < 0.05],
+    "*")
+  df$`OR..95..CI..x.x`[df$p.value.x.x < 0.05] <- paste(
+    df$`OR..95..CI..x.x`[df$p.value.x.x < 0.05],
+    "*")
+  df$`OR..95..CI..y.y`[df$p.value.y.y < 0.05] <- paste(
+    df$`OR..95..CI..y.y`[df$p.value.y.y < 0.05],
+    "*")
+  
+  flex_df <- flextable(df)
+  
+  flex_df %>%
+    bg(i = ~ (p.value < 0.05) & (estimate < 1),
+       j = c("OR..95..CI."),
+       part = "body", bg = "#B6F4B6") %>%
+    bg(i = ~ (p.value < 0.05) & (estimate > 1),
+       j = c("OR..95..CI."),
+       part = "body", bg = "#FCE4D6") %>%
+    bg(i = ~ (p.value.x < 0.05) & (estimate.x < 1),
+       j = c("OR..95..CI..x"),
+       part = "body", bg = "#B6F4B6") %>%
+    bg(i = ~ (p.value.x < 0.05) & (estimate.x > 1),
+       j = c("OR..95..CI..x"),
+       part = "body", bg = "#FCE4D6") %>%
+    bg(i = ~ (p.value.y < 0.05) & (estimate.y < 1),
+       j = c("OR..95..CI..y"),
+       part = "body", bg = "#B6F4B6") %>%
+    bg(i = ~ (p.value.y < 0.05) & (estimate.y > 1),
+       j = c("OR..95..CI..y"),
+       part = "body", bg = "#FCE4D6")%>%
+    bg(i = ~ (p.value.x.x < 0.05) & (estimate.x.x < 1),
+       j = c("OR..95..CI..x.x"),
+       part = "body", bg = "#B6F4B6") %>%
+    bg(i = ~ (p.value.x.x < 0.05) & (estimate.x.x > 1),
+       j = c("OR..95..CI..x.x"),
+       part = "body", bg = "#FCE4D6") %>%
+    bg(i = ~ (p.value.y.y < 0.05) & (estimate.y.y < 1),
+       j = c("OR..95..CI..y.y"),
+       part = "body", bg = "#B6F4B6") %>%
+    bg(i = ~ (p.value.y.y < 0.05) & (estimate.y.y > 1),
+       j = c("OR..95..CI..y.y"),
+       part = "body", bg = "#FCE4D6")
+}
+
+formatter(mood_summary)
+stress_summary[is.na(stress_summary)] <- 99999
+formatter(stress_summary)
+psychotic_summary[is.na(psychotic_summary)] <- 99999
+# psychotic_summary$
+formatter(psychotic_summary)
+```
+
+
+# Interaction Effect
+```{r}
+gc()
+sg_measure_model_full_nb_mood <- glm.nb(mood_count ~ 
+                             # + measure 
+                             + gender
+                             + race
+                             + flattype
+                             + age_group
+                             + cci
+                             + past_mood * measure
+                             + offset(log(measuredays)),
+                               data = df)
+b <- CI_output(sg_measure_model_full_nb_mood)
+summary_nb_mood <- summary(sg_measure_model_full_nb_mood)
+AIC(sg_measure_model_full_nb_mood)
+
+# b <- as.data.frame(summary_nb$coefficients)
+write.csv(b, "FINAL_interaction_check_all_incidences_from_2015_mood_count_full_negative_binomial.csv")
+summary_nb_mood
+```
+
+```{r}
+gc()
+sg_measure_model_full_nb_stress <- glm.nb(stress_count ~ 
+                             # + measure 
+                             + gender
+                             + race
+                             + flattype
+                             + age_group
+                             + cci
+                             + past_stress * measure
+                             + offset(log(measuredays)),
+                               data = df)
+c <- CI_output(sg_measure_model_full_nb_stress)
+summary_nb_stress <- summary(sg_measure_model_full_nb_stress)
+AIC(sg_measure_model_full_nb_stress)
+
+# b <- as.data.frame(summary_nb$coefficients)
+write.csv(c, "FINAL_interaction_check_all_incidences_from_2015_stress_count_full_negative_binomial.csv")
+summary_nb_stress
+```
+
+```{r}
+gc()
+sg_measure_model_full_nb_psychosis <- glm.nb(psychotic_count ~ 
+                             # + measure 
+                             + gender
+                             + race
+                             + flattype
+                             + age_group
+                             + cci
+                             + past_psychotic * measure
+                             + offset(log(measuredays)),
+                               data = df)
+d <- CI_output(sg_measure_model_full_nb_psychosis)
+summary_nb_psychosis <- summary(sg_measure_model_full_nb_psychosis)
+AIC(sg_measure_model_full_nb_psychosis)
+
+# b <- as.data.frame(summary_nb$coefficients)
+write.csv(d, "FINAL_interaction_check_all_incidences_from_2015_psychotic_count_full_negative_binomial.csv")
+summary_nb_psychosis
+```
+
+
+
+```{r}
+
+df_interaction <- df
+df_interaction$measure <- as.character(df_interaction$measure)
+df_interaction$measure[df_interaction$measure == "2017"] <- "1_2017"
+df_interaction$measure[df_interaction$measure == "2018"] <- "2_2018"
+df_interaction$measure[df_interaction$measure == "2019"] <- "3_2019"
+df_interaction$measure[df_interaction$measure == "COVID Pre-CB"] <- "4_Pre-CB"
+df_interaction$measure[df_interaction$measure == "Circuit Breaker"] <- "5_CB"
+df_interaction$measure[df_interaction$measure == "Phases 1 and 2"] <- "6_P1P2"
+df_interaction$measure[df_interaction$measure == "Phase 3"] <- "7_P3"
+df_interaction$measure[df_interaction$measure == "Heightened Alert"] <- "8_HA"
+df_interaction$measure[df_interaction$measure == "Dining"] <- "90_D"
+df_interaction$measure[df_interaction$measure == "Dining and Travel"] <- "90_D&T"
+df_interaction$measure[df_interaction$measure == "Stabilisation Phase"] <- "91_S"
+df_interaction$measure[df_interaction$measure == "Post-Stabilisation"] <- "92_PS"
+df_interaction$measure[df_interaction$measure == "2023"] <- "93_2023"
+
+# df$measure[df$measure == "CB"] <- "5_CB"
+# df$measure[df$measure == "Pre-CB"] <- "4_Pre-CB"
+
+ # df$measure[df$measure == "9_D"] <- "90_D"
+# df$measure[df$measure == "10_D&T"] <- "90_D&T"
+# df$measure[df$measure == "11_S"] <- "91_S"
+# df$measure[df$measure == "12_PS"] <- "92_PS"
+# df$measure[df$measure == "13_2023"] <- "93_2023"
+
+```
+
+```{r}
+interaction.plot(x.factor = df_interaction$measure,
+                 trace.factor = df_interaction$past_mood,
+                 response = df_interaction$mood_count / df_interaction$measuredays)
+
+interaction.plot(x.factor = df_interaction$measure,
+                 trace.factor = df_interaction$past_stress,
+                 response = df_interaction$stress_count / df_interaction$measuredays)
+
+interaction.plot(x.factor = df_interaction$measure,
+                 trace.factor = df_interaction$past_psychotic,
+                 response = df_interaction$psychotic_count)
+```
+
+
+```{r}
+mood_full <- read.csv("FINAL_interaction_check_all_incidences_from_2015_mood_count_full_negative_binomial.csv")
+stress_full <- read.csv("FINAL_interaction_check_all_incidences_from_2015_stress_count_full_negative_binomial.csv")
+psychotic_full <- read.csv("FINAL_interaction_check_all_incidences_from_2015_psychotic_count_full_negative_binomial.csv")
+
+formatting_full <- function(df) {
+  df$`OR..95..CI.`[df$p.value < 0.05] <- paste(
+  df$`OR..95..CI.`[df$p.value < 0.05],
+  "*")
+
+  flex_a <- flextable(df)
+
+  flex_a %>%
+    bg(i = ~ (p.value < 0.05) & (estimate < 1),
+       j = c("OR..95..CI."),
+       part = "body", bg = "#B6F4B6") %>%
+    bg(i = ~ (p.value < 0.05) & (estimate > 1),
+       j = c("OR..95..CI."),
+       part = "body", bg = "#FCE4D6")
+}
+
+library(flextable)
+formatting_full(mood_full)
+formatting_full(stress_full)
+formatting_full(psychotic_full)
+```
+
+
+# Supplementary
+
+## Check Model Fit Against Poisson
+```{r}
+# table(df$cci)
+gc()
+sg_measure_model_full_poisson <- glm(mood_count ~ 
+                             + measure
+                             + gender
+                             + race
+                             + flattype
+                             + age_group
+                             + cci
+                             + past_mood
+                             + offset(log(measuredays)),
+                             family = poisson(),
+                               data = df)
+b <- CI_output(sg_measure_model_full_poisson)
+summary_poisson <- summary(sg_measure_model_full_poisson)
+AIC(sg_measure_model_full_poisson)
+
+# b <- as.data.frame(summary_nb$coefficients)
+write.csv(b, "FINAL_all_incidences_from_2015_mood_count_full_poisson.csv")
+summary_poisson
+
+# AIC: 509850 
+# AIC greater than that of the negative binomial model (430620.5) --> Negative binomial used for consistency
+```
+
+```{r}
+# table(df$cci)
+gc()
+sg_measure_model_full_poisson <- glm(stress_count ~ 
+                             + measure
+                             + gender
+                             + race
+                             + flattype
+                             + age_group
+                             + cci
+                             + past_stress
+                             + offset(log(measuredays)),
+                             family = poisson(),
+                               data = df)
+c <- CI_output(sg_measure_model_full_poisson)
+summary_poisson <- summary(sg_measure_model_full_poisson)
+AIC(sg_measure_model_full_poisson)
+
+write.csv(c, "FINAL_all_incidences_from_2015_stress_count_full_poisson.csv")
+summary_poisson
+
+```
+
+```{r}
+# table(df$cci)
+gc()
+sg_measure_model_full_poisson <- glm(psychotic_count ~ 
+                             + measure
+                             + gender
+                             + race
+                             + flattype
+                             + age_group
+                             + cci
+                             + past_psychotic
+                             + offset(log(measuredays)),
+                             family = poisson(),
+                               data = df)
+d <- CI_output(sg_measure_model_full_poisson)
+summary_poisson <- summary(sg_measure_model_full_poisson)
+AIC(sg_measure_model_full_poisson)
+
+write.csv(d, "FINAL_all_incidences_from_2015_psychotic_count_full_poisson.csv")
+summary_poisson
+
+```
+
+## To add: Supplementary run with Measure Periods "Dining" and "Dining and Travel" combined into one

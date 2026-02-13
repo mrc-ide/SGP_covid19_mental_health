@@ -1,0 +1,333 @@
+---
+title: "Mental Health Mediclaims"
+author: "Nicole Goh"
+date: "2025-08-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(data.table)
+library(flextable)
+```
+
+# MDdf Cleaning
+```{r}
+MDdf <- read.csv("MDdf_admissions_2015to2023.csv")
+
+
+MDdf$admission_date <- ymd(MDdf$admission_date)
+backup_MDdf <- MDdf
+
+MDdf$diagcode <- as.character(MDdf$diagcode)
+
+MDdf$ICDMain <- substr(MDdf$diagcode, 0, 3)
+
+MDdf$ICDSpecific <- substr(MDdf$diagcode, 0, 5)
+MDdf$ICDMoreSpecific <- substr(MDdf$diagcode, 0, 6)
+
+MDdf[,c(1:10)]
+```
+
+```{r}
+time_period_cleaner <- function(df){
+  df <- df %>% mutate(measure = case_when(
+    measure < (as.Date("2018-01-01")) ~ "2017",
+    measure >= (as.Date("2018-01-01")) & measure < (as.Date("2019-01-01")) ~ "2018",
+    measure >= (as.Date("2019-01-01")) & measure < (as.Date("2020-01-23")) ~ "2019",
+    measure >= (as.Date("2020-01-23")) & measure < (as.Date("2020-04-03")) ~ "COVID Pre-CB",
+    measure >= (as.Date("2020-04-03")) & measure <= (as.Date("2020-06-01")) ~ "Circuit Breaker",
+      # measure <= (as.Date("2020-06-01")) ~ "Circuit Breaker",
+      measure > (as.Date("2020-06-01")) & measure <= (as.Date("2020-12-27")) ~ "Phases 1 and 2",
+    measure > (as.Date("2020-12-27")) & measure <= (as.Date("2021-05-07")) ~ "Phase 3",
+      measure > (as.Date("2021-05-07")) & measure <= (as.Date("2021-08-09")) ~ "Heightened Alert",
+     #phase 2HA
+    measure > (as.Date("2021-08-09")) & measure <= (as.Date("2021-08-20")) ~ "Dining",
+    # adjustments to phase 2HA on 19th, and travel restrictions lifted on 21st
+      measure > (as.Date("2021-08-20")) & measure <= (as.Date("2021-09-26")) ~ "Dining and Travel",
+    #stabilisation phase (links: https://www.moh.gov.sg/newsroom/stabilising-our-covid-19-situation-and-protecting-our-overall-healthcare-capacity_24september2021/, https://www.mdpi.com/2571-841X/5/3/35)
+    measure > (as.Date("2021-09-26")) & measure < (as.Date("2022-04-26")) ~ "Stabilisation Phase",
+    #transition phase (links: https://www.moh.gov.sg/newsroom/further-easing-of-community-and-border-measures/)
+    measure > (as.Date("2022-04-26")) & measure < (as.Date("2023-01-01")) ~ "Post-Stabilisation",
+    measure >= (as.Date("2023-01-01")) ~ "2023"
+    ))
+  
+  df
+}
+```
+
+#Poplist Cleaning
+```{r}
+gc()
+
+poplist <- read.csv("C:/Users/nicgoh/Behavioural Study/PopulationList_Jun2023updated.csv")
+#6724235 individuals to begin with
+nrow(poplist)
+poplist <- poplist %>% filter(gender != "" & !is.na(gender))
+# dropped 10139 individuals with missing gender to leave 6714096 in the population
+nrow(poplist)
+
+poplist$dummy_dob <- paste(poplist$birth_year, poplist$birth_month, "01", sep = "-")
+poplist$dummy_dob <- as.Date(poplist$dummy_dob)
+poplist$age2017 <- as.integer(floor((as.Date("2017-01-01") - poplist$dummy_dob)/365))
+
+# dropped individuals who were not 18 at the time the study period began --> left with 5210286 individuals
+poplist <- poplist %>% filter(age2017 >= 18)
+nrow(poplist)
+# poplist <- poplist %>% filter(gender != "")
+
+# dropped individuals who died before the study period ended --> left with 5122658
+deaths <- read.csv("C:/Users/nicgoh/Behavioural Study/Datasets/PopDeceased20240827.csv")
+deaths$death_dt <- dmy(deaths$death_dt)
+deaths_in_period <- deaths %>% filter(death_dt < as.Date("2024-01-01"))
+deadlist <- unique(deaths$uin)
+nrow(poplist)
+poplist <- poplist %>% filter(!(uin %in% deadlist))
+nrow(poplist)
+
+# dropped all non-scprs --> left with 3256749
+poplist <- poplist %>% filter(resident_type == "SCPR")
+nrow(poplist)
+
+a <- data.frame(c("2017", "2018", "2019", "COVID Pre-CB", "Circuit Breaker", "Phases 1 and 2",
+                  "Phase 3", "Heightened Alert", "Dining", 
+                  "Dining and Travel", "Stabilisation Phase", "Post-Stabilisation", "2023"))
+uins <- unique(poplist$uin)
+timeperiodcount <- merge(uins, a)
+colnames(timeperiodcount) <- c("uin", "measure")
+df <- timeperiodcount
+```
+
+## Counts for First Incidence
+```{r}
+mood_icd_list <- c("F30", "F31", "F32", "F33", "F340", "F341", "F348", "F349")
+stress_icd_list <- c("F430", "F431", "F432",
+                    "F410", "F411", "F413", "F418", "F419", 
+                    "F420")
+psychotic_icd_list <- c("F20", "F21", "F22", "F23", "F24", "F25", "F28", "F29")
+
+
+MDdf_mood <- MDdf %>% 
+  filter(ICDSpecific %in% mood_icd_list |
+           ICDMain %in% mood_icd_list) %>%
+  group_by(uin) %>%
+  summarize(admission_date = min(admission_date)) %>%
+  filter(admission_date >= as.Date("2017-01-01"))
+MDdf_mood$measure <- MDdf_mood$admission_date
+MDdf_mood <- time_period_cleaner(MDdf_mood)
+MDdf_mood <- MDdf_mood %>% 
+  group_by(uin, measure) %>% 
+  summarize(mood_count_fi = n())
+
+
+MDdf_stress <- MDdf %>% 
+  filter(ICDSpecific %in% stress_icd_list | 
+           ICDMain %in% stress_icd_list) %>% 
+  group_by(uin) %>%
+  summarize(admission_date = min(admission_date)) %>%
+  filter(admission_date >= as.Date("2017-01-01"))
+MDdf_stress$measure <- MDdf_stress$admission_date
+MDdf_stress <- time_period_cleaner(MDdf_stress)
+MDdf_stress <- MDdf_stress %>% 
+  group_by(uin, measure) %>% 
+  summarize(stress_count_fi = n())
+
+
+MDdf_psychotic <- MDdf %>% 
+  filter(ICDMain %in% psychotic_icd_list | 
+           ICDSpecific %in% psychotic_icd_list) %>% 
+  group_by(uin) %>%
+  summarize(admission_date = min(admission_date)) %>%
+  filter(admission_date >= as.Date("2017-01-01"))
+MDdf_psychotic$measure <- MDdf_psychotic$admission_date
+MDdf_psychotic <- time_period_cleaner(MDdf_psychotic)
+MDdf_psychotic <- MDdf_psychotic %>% 
+  group_by(uin, measure) %>% 
+  summarize(psychotic_count_fi = n())
+
+
+# checking that there is only one occurance for each uin (first incidence)
+checker <- MDdf_mood %>% group_by(uin) %>% summarize(count = n())
+table(checker$count)
+
+checker <- MDdf_stress %>% group_by(uin) %>% summarize(count = n())
+table(checker$count)
+
+checker <- MDdf_psychotic %>% group_by(uin) %>% summarize(count = n())
+table(checker$count)
+
+table(MDdf_mood$mood_count_fi)
+table(MDdf_stress$stress_count_fi)
+table(MDdf_psychotic$psychotic_count_fi)
+
+df <- left_join(df, MDdf_mood, by = c("uin", "measure"))
+df <- left_join(df, MDdf_stress, by = c("uin", "measure"))
+df <- left_join(df, MDdf_psychotic, by = c("uin", "measure"))
+
+df$mood_count_fi[is.na(df$mood_count_fi)] <- 0
+df$stress_count_fi[is.na(df$stress_count_fi)] <- 0
+df$psychotic_count_fi[is.na(df$psychotic_count_fi)] <- 0
+```
+
+
+##Counts for multiple recurrences
+```{r}
+
+MDdf$measure <- MDdf$admission_date
+MDdf <- time_period_cleaner(MDdf)
+
+mood_icd_list <- c("F30", "F31", "F32", "F33", "F340", "F341", "F348", "F349")
+stress_icd_list <- c("F430", "F431", "F432",
+                    "F410", "F411", "F413", "F418", "F419", 
+                    "F420")
+psychotic_icd_list <- c("F20", "F21", "F22", "F23", "F24", "F25", "F28", "F29")
+
+MDdf_mood <- MDdf %>%
+  filter(ICDSpecific %in% mood_icd_list |
+           ICDMain %in% mood_icd_list) %>%
+  group_by(uin, measure) %>%
+  summarize(mood_count = n())
+
+MDdf_stress <- MDdf %>%
+  filter(ICDSpecific %in% stress_icd_list |
+           ICDMain %in% stress_icd_list) %>%
+  group_by(uin, measure) %>%
+  summarize(stress_count = n())
+
+MDdf_psychotic <- MDdf %>%
+  filter(ICDMain %in% psychotic_icd_list |
+           ICDSpecific %in% psychotic_icd_list) %>%
+  group_by(uin, measure) %>%
+  summarize(psychotic_count = n())
+
+df <- left_join(df, MDdf_mood, by = c("uin", "measure"))
+df <- left_join(df, MDdf_stress, by = c("uin", "measure"))
+df <- left_join(df, MDdf_psychotic, by = c("uin", "measure"))
+
+df$mood_count[is.na(df$mood_count)] <- 0
+df$stress_count[is.na(df$stress_count)] <- 0
+df$psychotic_count[is.na(df$psychotic_count)] <- 0
+
+```
+
+# Merge with df
+
+```{r}
+rm(MDdf)
+
+gc()
+
+as.Date("2018-01-01") - as.Date("2017-01-01")
+as.Date("2019-01-01") - as.Date("2018-01-01")
+as.Date("2020-01-23") - as.Date("2019-01-01")
+as.Date("2020-04-03") - as.Date("2020-01-23")
+# because this time period is inclusive of both 2020-06-01 and 2020-04-03
+as.Date("2020-06-02") - as.Date("2020-04-03")
+as.Date("2020-12-27") - as.Date("2020-06-01")
+as.Date("2021-05-07") - as.Date("2020-12-27")
+as.Date("2021-08-09") - as.Date("2021-05-07")
+as.Date("2021-08-20") - as.Date("2021-08-09")
+as.Date("2021-09-26") - as.Date("2021-08-20")
+# because this time period is not inclusive of 2021-09-26 or 2022-04-26 
+as.Date("2022-04-25") - as.Date("2021-09-26")
+# because this time period is not inclusive of 2021-04-26 or 2023-01-01
+as.Date("2022-12-31") - as.Date("2022-04-26")
+as.Date("2024-01-01") - as.Date("2023-01-01")
+timeperioddays <- data.frame(c("2017", "2018", "2019", "COVID Pre-CB", "Circuit Breaker", 
+                               "Phases 1 and 2", "Phase 3", "Heightened Alert", "Dining", 
+                               "Dining and Travel", "Stabilisation Phase", "Post-Stabilisation", "2023"), 
+                             c(365,365,387,71,60,209,131,94,11,37, 211,249, 365))
+colnames(timeperioddays) <- c("measure", "measuredays")
+df <- left_join(df, timeperioddays, by=c("measure"))
+
+
+df_backup <- df
+
+```
+
+
+```{r}
+pops <- poplist %>% dplyr::select(uin, age2017, race, gender, flattype)
+
+breaks <- c(-1, 29, 39, 49, 59, 1000)
+labels <- c("18-29", "30-39", "40-49", "50-59", "60+")
+pops$age_group <- cut(pops$age2017, breaks = breaks, labels = labels, include.lowest = TRUE)
+
+pops <- pops %>% dplyr::select(-age2017)
+
+df <- left_join(df, pops, by = 'uin')
+
+```
+
+
+```{r}
+gc()
+cci <- read.csv("C:/Users/nicgoh/Behavioural Study/Anti-Vaccer Healthcare Utilisation/CCIDiagFirstCAA20240227.csv")
+#getting date of discharge
+cci <- cci %>% dplyr::select(!starts_with("firstyr"))
+datefun <- function(x) {dmy(x)}
+cci[, c(2:19)] <- lapply(cci[, c(2:19)], datefun)
+
+d <- cci
+d[, c(2:19)] <- lapply(d[, c(2:19)], function(x) {ymd(x)})
+    for (j in 2:19){
+      d[,j] <- as.numeric(d[,j] < as.Date("2017-01-01"))
+    }
+ccidf <- d
+
+
+ccidf$firstdate_DMNoCompl[ccidf$firstdate_DMCompl == 1] <- 0
+ccidf$firstdate_Cancer[ccidf$firstdate_MetastaticCarcinoma == 1] <- 0
+ccidf$firstdate_ModLiver[ccidf$firstdate_SevereLiver == 1] <- 0
+ccidf$firstdate_MildLiver[ccidf$firstdate_SevereLiver == 1 | ccidf$firstdate_ModLiver == 1] <- 0
+
+ccidf[,c(2:19)][is.na(ccidf[,c(2:19)])] <- 0
+
+ccidf$cciscores <- 
+  ccidf$firstdate_AMI + ccidf$firstdate_CVD + 
+  ccidf$firstdate_CPD + ccidf$firstdate_CHF + 
+  ccidf$firstdate_Dementia + ccidf$firstdate_DMNoCompl + 
+  ccidf$firstdate_MildLiver + ccidf$firstdate_PUD + 
+  ccidf$firstdate_PVD + ccidf$firstdate_Rheuma + 
+  (ccidf$firstdate_DMCompl + ccidf$firstdate_Hemiplegia + 
+     ccidf$firstdate_Renal + ccidf$firstdate_Cancer)*2 + 
+  (ccidf$firstdate_ModLiver + ccidf$firstdate_SevereLiver)*3 +
+  (ccidf$firstdate_MetastaticCarcinoma)*6
+
+breaks <- c(-1, 0, 2, 4, 100)
+labels <- c("None", "Mild", "Moderate", "Severe")
+ccidf$cci <- cut(ccidf$cciscores, breaks = breaks, labels = labels, include.lowest = TRUE)
+
+ccigroup_df <- ccidf %>% dplyr::select(uin, cci)
+df <- left_join(df, ccigroup_df, by = 'uin')
+
+```
+
+```{r}
+past_MD_mood <- read.csv("past_MD_mood_from_2015.csv")
+past_MD_stress <- read.csv("past_MD_stress_from_2015.csv")
+past_MD_psychotic <- read.csv("past_MD_psychotic_from_2015.csv")
+
+
+df$pre_2017_mood <- 0
+df$pre_2017_mood[df$uin %in% past_MD_mood$uin] <- 1
+
+df$pre_2017_stress <- 0
+df$pre_2017_stress[df$uin %in% past_MD_stress$uin] <- 1
+
+df$pre_2017_psychotic <- 0
+df$pre_2017_psychotic[df$uin %in% past_MD_psychotic$uin] <- 1
+
+```
+
+
+```{r}
+write.csv(df, "final_regression_df.csv")
+```
+
